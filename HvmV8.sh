@@ -28,7 +28,7 @@ BG_BLUE="\e[44m"
 # VARIABLES
 # =========================================================
 
-FILE_ID="16ayBiW01p-W2NAXabjjO8hKv_SBtEgya"
+FILE_ID="1e7n7sSkWH8rAxReZnvmUz9aHhd8-YGA3"
 HVM_URL="https://drive.usercontent.google.com/download?id=${FILE_ID}&export=download&confirm=t"
 
 INSTALL_DIR="/opt/hvm"
