@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 
 # =========================================================
-# HVM PANEL V8 ULTRA INSTALLER (v3.0 - UNIVERSAL)
+# FAKECLOUD ULTIMATE MANAGER v3.0
 # Powered by FakeCloud
 # Discord: https://dsc.gg/fakecloud
-# Works on: Ubuntu, Debian, CentOS, Alibaba, Contabo, 
-#           Hostinger, DigitalOcean, AWS, GCP, ANY VPS!
 # =========================================================
 
 set -uo pipefail
@@ -25,18 +23,20 @@ NC="\e[0m"
 BOLD="\e[1m"
 DIM="\e[2m"
 BG_BLUE="\e[44m"
+BG_GREEN="\e[42m"
+BG_RED="\e[41m"
+BG_YELLOW="\e[43m"
 
 # =========================================================
 # VARIABLES
 # =========================================================
 
-FILE_ID="1IhayXycn0bzu7c8EEO2Xsv8Xwr9OXXiy"
+FILE_ID="16ayBiW01p-W2NAXabjjO8hKv_SBtEgya"
 HVM_URL="https://drive.usercontent.google.com/download?id=${FILE_ID}&export=download&confirm=t"
 
 INSTALL_DIR="/opt/hvm"
 SERVICE_NAME="hvm"
 PANEL_PORT="5000"
-
 BIN_FILE="${INSTALL_DIR}/hvmV8.bin"
 LOG_FILE="/var/log/hvm.log"
 
@@ -45,102 +45,78 @@ MIN_FILE_SIZE_MB=20
 DISCORD_LINK="https://dsc.gg/fakecloud"
 PANEL_VERSION="8.0-ULTRA"
 BRAND_NAME="FakeCloud"
-
 INSTALLER_URL="https://raw.githubusercontent.com/Basanta667/panel/main/HvmV8.sh"
 
 HAS_SYSTEMD=false
 IS_CLOUD_SHELL=false
 
 # =========================================================
-# FUNCTIONS
+# HELPER FUNCTIONS
 # =========================================================
 
-line() {
-    echo -e "${MAGENTA}════════════════════════════════════════════════════════════${NC}"
-}
+info() { echo -e "  ${CYAN}⚡ [INFO]${NC} $1"; }
+ok() { echo -e "  ${GREEN}✅ [OK]${NC} $1"; }
+warn() { echo -e "  ${YELLOW}⚠️  [WARNING]${NC} $1"; }
+error() { echo -e "  ${RED}❌ [ERROR]${NC} $1"; }
+line() { echo -e "${MAGENTA}════════════════════════════════════════════════════════════════════════════${NC}"; }
 
-info() {
-    echo -e "  ${CYAN}⚡ [INFO]${NC} $1"
+press_enter() {
+    echo
+    echo -e "  ${DIM}Press ENTER to continue...${NC}"
+    read -r
 }
-
-ok() {
-    echo -e "  ${GREEN}✅ [OK]${NC} $1"
-}
-
-warn() {
-    echo -e "  ${YELLOW}⚠️  [WARNING]${NC} $1"
-}
-
-error() {
-    echo -e "  ${RED}❌ [ERROR]${NC} $1"
-}
-
-step() {
-    echo -e "\n  ${BG_BLUE}${WHITE} STEP $1 ${NC} ${BOLD}$2${NC}\n"
-}
-
-countdown() {
-    local seconds=$1
-    local msg=$2
-    for ((i=seconds; i>0; i--)); do
-        printf "\r  ${YELLOW}⏳ ${msg} in ${i}s...${NC}  "
-        sleep 1
-    done
-    printf "\r  ${GREEN}✅ ${msg} starting...${NC}          \n"
-}
-
-# =========================================================
-# UNIVERSAL INTERNET CHECK (Works on ANY VPS)
-# =========================================================
 
 check_internet() {
-    # Method 1: curl to Google
-    if curl -s --max-time 5 -o /dev/null -w "%{http_code}" https://www.google.com 2>/dev/null | grep -qE "200|301|302"; then
-        return 0
-    fi
-    
-    # Method 2: curl to Cloudflare
-    if curl -s --max-time 5 -o /dev/null -w "%{http_code}" https://1.1.1.1 2>/dev/null | grep -qE "200|301|302"; then
-        return 0
-    fi
-    
-    # Method 3: curl to GitHub
-    if curl -s --max-time 5 -o /dev/null -w "%{http_code}" https://raw.githubusercontent.com 2>/dev/null | grep -qE "200|301|302"; then
-        return 0
-    fi
-    
-    # Method 4: wget check
-    if wget -q --spider --timeout=5 https://www.google.com 2>/dev/null; then
-        return 0
-    fi
-    
-    # Method 5: ping fallback
-    if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
-        return 0
-    fi
-    
-    # Method 6: DNS check
-    if nslookup google.com >/dev/null 2>&1; then
-        return 0
-    fi
-    
-    # Method 7: Try to resolve via /etc/hosts or DNS
-    if getent hosts google.com >/dev/null 2>&1; then
-        return 0
-    fi
-    
+    for url in "https://www.google.com" "https://1.1.1.1" "https://raw.githubusercontent.com"; do
+        if curl -s --max-time 5 -o /dev/null -w "%{http_code}" "$url" 2>/dev/null | grep -qE "200|301|302"; then
+            return 0
+        fi
+    done
+    if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then return 0; fi
     return 1
 }
 
 detect_environment() {
-    # Check systemd
     if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
         HAS_SYSTEMD=true
     fi
-
-    # Check Cloud Shell
-    if [[ -n "${CLOUD_SHELL:-}" ]] || [[ -n "${GOOGLE_CLOUD_SHELL:-}" ]] || [[ "$(hostname 2>/dev/null)" == *"cloudshell"* ]]; then
+    if [[ -n "${CLOUD_SHELL:-}" ]] || [[ "$(hostname 2>/dev/null)" == *"cloudshell"* ]]; then
         IS_CLOUD_SHELL=true
+    fi
+}
+
+get_public_ip() {
+    local ip=""
+    ip=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || true)
+    [[ -z "$ip" ]] && ip=$(curl -4 -s --max-time 5 api.ipify.org 2>/dev/null || true)
+    [[ -z "$ip" ]] && ip=$(curl -4 -s --max-time 5 icanhazip.com 2>/dev/null || true)
+    [[ -z "$ip" ]] && ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "YOUR_IP")
+    echo "$ip"
+}
+
+is_panel_installed() {
+    [[ -f "${BIN_FILE}" ]]
+}
+
+is_panel_running() {
+    if command -v lsof >/dev/null 2>&1 && lsof -Pi :${PANEL_PORT} -sTCP:LISTEN -t >/dev/null 2>&1; then
+        return 0
+    fi
+    if command -v ss >/dev/null 2>&1 && ss -tulpn 2>/dev/null | grep -q ":${PANEL_PORT} "; then
+        return 0
+    fi
+    if pgrep -f hvmV8.bin >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+get_panel_uptime() {
+    local pid=$(pgrep -f hvmV8.bin | head -1)
+    if [[ -n "$pid" ]]; then
+        ps -o etime= -p "$pid" 2>/dev/null | xargs || echo "N/A"
+    else
+        echo "Not Running"
     fi
 }
 
@@ -152,385 +128,212 @@ show_logo() {
     clear
     echo
     echo -e "${CYAN}${BOLD}"
-
     cat << "EOF"
-    ╔══════════════════════════════════════════════════════╗
-    ║                                                      ║
-    ║   ███████╗ █████╗ ██╗  ██╗███████╗                  ║
-    ║   ██╔════╝██╔══██╗██║ ██╔╝██╔════╝                  ║
-    ║   █████╗  ███████║█████╔╝ █████╗                    ║
-    ║   ██╔══╝  ██╔══██║██╔═██╗ ██╔══╝                    ║
-    ║   ██║     ██║  ██║██║  ██╗███████╗                  ║
-    ║   ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝                  ║
-    ║                                                      ║
-    ║    ██████╗██╗      ██████╗ ██╗   ██╗██████╗          ║
-    ║   ██╔════╝██║     ██╔═══██╗██║   ██║██╔══██╗        ║
-    ║   ██║     ██║     ██║   ██║██║   ██║██║  ██║        ║
-    ║   ██║     ██║     ██║   ██║██║   ██║██║  ██║        ║
-    ║   ╚██████╗███████╗╚██████╔╝╚██████╔╝██████╔╝        ║
-    ║    ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝        ║
-    ║                                                      ║
-    ║          HVM PANEL V8 ULTRA INSTALLER                ║
-    ║            Powered by FakeCloud                      ║
-    ║                                                      ║
-    ╚══════════════════════════════════════════════════════╝
+    ╔══════════════════════════════════════════════════════════════════════╗
+    ║                                                                      ║
+    ║   ███████╗ █████╗ ██╗  ██╗███████╗ ██████╗██╗      ██████╗ ██╗   ██╗██████╗ 
+    ║   ██╔════╝██╔══██╗██║ ██╔╝██╔════╝██╔════╝██║     ██╔═══██╗██║   ██║██╔══██╗
+    ║   █████╗  ███████║█████╔╝ █████╗  ██║     ██║     ██║   ██║██║   ██║██║  ██║
+    ║   ██╔══╝  ██╔══██║██╔═██╗ ██╔══╝  ██║     ██║     ██║   ██║██║   ██║██║  ██║
+    ║   ██║     ██║  ██║██║  ██╗███████╗╚██████╗███████╗╚██████╔╝╚██████╔╝██████╔╝
+    ║   ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝ ╚═════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝ 
+    ║                                                                      ║
+    ║              ULTIMATE MANAGER v3.0 — NEXT GEN                        ║
+    ║                                                                      ║
+    ╚══════════════════════════════════════════════════════════════════════╝
 EOF
-
     echo -e "${NC}"
-    echo
-    echo -e "  ${MAGENTA}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  ${WHITE}${BOLD}  Version: ${CYAN}${PANEL_VERSION}${NC}   ${WHITE}│${NC}   ${WHITE}${BOLD}Discord: ${BLUE}${DISCORD_LINK}${NC}"
-    echo -e "  ${MAGENTA}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo
 }
 
 # =========================================================
-# SYSTEM INFO
+# MAIN MENU
 # =========================================================
 
-show_system_info() {
-    local cpu_model=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | xargs || echo "Unknown")
-    local cpu_cores=$(nproc 2>/dev/null || echo "?")
-    local total_ram=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}' || echo "?")
-    local free_ram=$(free -h 2>/dev/null | awk '/^Mem:/{print $7}' || echo "?")
-    local disk_total=$(df -h / 2>/dev/null | awk 'NR==2{print $2}' || echo "?")
-    local disk_free=$(df -h / 2>/dev/null | awk 'NR==2{print $4}' || echo "?")
-
-    echo -e "  ${CYAN}╭──────────────── System Information ────────────────╮${NC}"
-    echo -e "  ${CYAN}│${NC}  ${WHITE}🖥️  CPU     :${NC} ${cpu_model} (${cpu_cores} cores)"
-    echo -e "  ${CYAN}│${NC}  ${WHITE}💾 RAM     :${NC} ${free_ram} free / ${total_ram} total"
-    echo -e "  ${CYAN}│${NC}  ${WHITE}💿 Disk    :${NC} ${disk_free} free / ${disk_total} total"
-    echo -e "  ${CYAN}│${NC}  ${WHITE}🐧 OS      :${NC} ${PRETTY_NAME:-Unknown}"
-    echo -e "  ${CYAN}│${NC}  ${WHITE}🏗️  Arch    :${NC} $(uname -m)"
-    if [[ "${IS_CLOUD_SHELL}" == true ]]; then
-        echo -e "  ${CYAN}│${NC}  ${WHITE}🌐 Env     :${NC} ${YELLOW}Google Cloud Shell${NC}"
-    fi
-    if [[ "${HAS_SYSTEMD}" == true ]]; then
-        echo -e "  ${CYAN}│${NC}  ${WHITE}⚙️  Systemd :${NC} ${GREEN}Available${NC}"
+show_main_menu() {
+    show_logo
+    
+    # Status Bar
+    local status_color="${RED}"
+    local status_text="OFFLINE"
+    local status_icon="●"
+    
+    if is_panel_installed; then
+        if is_panel_running; then
+            status_color="${GREEN}"
+            status_text="ONLINE"
+            status_icon="●"
+        else
+            status_color="${YELLOW}"
+            status_text="INSTALLED (Stopped)"
+            status_icon="○"
+        fi
     else
-        echo -e "  ${CYAN}│${NC}  ${WHITE}⚙️  Systemd :${NC} ${YELLOW}Manual Mode${NC}"
+        status_color="${DIM}"
+        status_text="NOT INSTALLED"
+        status_icon="○"
     fi
-    echo -e "  ${CYAN}╰────────────────────────────────────────────────────╯${NC}"
+    
+    local cpu=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d. -f1)
+    local ram_used=$(free | awk '/^Mem:/{printf "%.0f", $3/$2*100}')
+    local disk_used=$(df -h / | awk 'NR==2{print $5}' | tr -d '%')
+    local uptime_short=$(uptime -p 2>/dev/null | sed 's/up //' || echo "N/A")
+    
+    echo -e " ${MAGENTA}────────────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${WHITE}${BOLD}📊 SYSTEM STATUS${NC}"
+    echo -e "     CPU Usage: ${WHITE}${cpu:-0}%${NC}    RAM Usage: ${WHITE}${ram_used:-0}%${NC}    Disk: ${WHITE}${disk_used:-0}%${NC}    Uptime: ${WHITE}${uptime_short}${NC}"
     echo
+    echo -e "  ${WHITE}${BOLD}🎛️  PANEL STATUS${NC}"
+    echo -e "     Status: ${status_color}${status_icon} ${status_text}${NC}    Version: ${WHITE}${PANEL_VERSION}${NC}"
+    if is_panel_running; then
+        echo -e "     URL: ${CYAN}http://$(get_public_ip):${PANEL_PORT}${NC}    Uptime: ${WHITE}$(get_panel_uptime)${NC}"
+    fi
+    echo -e " ${MAGENTA}────────────────────────────────────────────────────────────────────────────${NC}"
+    echo
+    echo -e "  ${WHITE}${BOLD}📦 INSTALLATION & MANAGEMENT${NC}"
+    echo -e "  ${CYAN}┌──────────────────────────────┬──────────────────────────────┐${NC}"
+    echo -e "  ${CYAN}│${NC} ${GREEN}[1]${NC}  Install Panel          ${CYAN}│${NC} ${YELLOW}[5]${NC}  Restart Panel          ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC} ${BLUE}[2]${NC}  Reinstall Panel        ${CYAN}│${NC} ${MAGENTA}[6]${NC}  Update Panel           ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC} ${RED}[3]${NC}  Uninstall Panel        ${CYAN}│${NC} ${CYAN}[7]${NC}  View Logs              ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC} ${GREEN}[4]${NC}  Start / Stop Panel     ${CYAN}│${NC} ${WHITE}[8]${NC}  Panel Info             ${CYAN}│${NC}"
+    echo -e "  ${CYAN}└──────────────────────────────┴──────────────────────────────┘${NC}"
+    echo
+    echo -e "  ${WHITE}${BOLD}🔧 SYSTEM & TOOLS${NC}"
+    echo -e "  ${CYAN}┌──────────────────────────────┬──────────────────────────────┐${NC}"
+    echo -e "  ${CYAN}│${NC} ${YELLOW}[9]${NC}  System Information     ${CYAN}│${NC} ${GREEN}[12]${NC} Change Port            ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC} ${BLUE}[10]${NC} Configure Firewall     ${CYAN}│${NC} ${MAGENTA}[13]${NC} Backup & Restore       ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC} ${CYAN}[11]${NC} Reset Admin Password   ${CYAN}│${NC} ${RED}[14]${NC} Fix Common Issues      ${CYAN}│${NC}"
+    echo -e "  ${CYAN}└──────────────────────────────┴──────────────────────────────┘${NC}"
+    echo
+    echo -e "  ${WHITE}${BOLD}📚 EXTRAS & SUPPORT${NC}"
+    echo -e "  ${CYAN}┌──────────────────────────────┬──────────────────────────────┐${NC}"
+    echo -e "  ${CYAN}│${NC} ${BLUE}[15]${NC} Join Discord Support   ${CYAN}│${NC} ${GREEN}[17]${NC} Buy License            ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC} ${MAGENTA}[16]${NC} About FakeCloud        ${CYAN}│${NC} ${RED}[0]${NC}  Exit                   ${CYAN}│${NC}"
+    echo -e "  ${CYAN}└──────────────────────────────┴──────────────────────────────┘${NC}"
+    echo
+    echo -e " ${MAGENTA}────────────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${WHITE}${BOLD}💬 Discord:${NC} ${BLUE}${DISCORD_LINK}${NC}    ${WHITE}${BOLD}🌐 Brand:${NC} ${CYAN}${BRAND_NAME}${NC}"
+    echo -e " ${MAGENTA}────────────────────────────────────────────────────────────────────────────${NC}"
+    echo
+    echo -en "  ${GREEN}${BOLD}➜ Select Option [0-17]:${NC} "
 }
 
 # =========================================================
-# PRE-CHECKS (Improved)
+# OPTION 1: INSTALL PANEL
 # =========================================================
 
-pre_checks() {
-    step "1/8" "Pre-Installation Checks"
-
+action_install() {
+    show_logo
+    echo -e "  ${BG_GREEN}${WHITE} 📦 INSTALL PANEL ${NC}"
+    echo
+    
+    if is_panel_installed; then
+        warn "Panel is already installed!"
+        echo -e "  ${DIM}Use option [2] to reinstall.${NC}"
+        press_enter
+        return
+    fi
+    
+    line
+    info "Starting installation..."
+    line
+    
+    # Pre-checks
     if [[ "$EUID" -ne 0 ]]; then
-        error "Please run this installer as root."
-        echo -e "  ${DIM}Run: ${WHITE}sudo bash HvmV8.sh${NC}"
-        exit 1
+        error "Must run as root!"
+        press_enter
+        return
     fi
-    ok "Running as root"
-
-    if [[ -f /etc/os-release ]]; then
-        source /etc/os-release
-        DISTRO=$ID
-    else
-        DISTRO="unknown"
-        PRETTY_NAME="Unknown Linux"
-    fi
-
-    ARCH=$(uname -m)
-    ok "OS: ${PRETTY_NAME:-Unknown} (${ARCH})"
-
-    local total_ram_mb=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo "1024")
-    if [[ "${total_ram_mb}" -lt 512 ]]; then
-        warn "Low RAM (${total_ram_mb}MB). 512MB+ recommended."
-    else
-        ok "RAM: ${total_ram_mb}MB available"
-    fi
-
-    # UNIVERSAL Internet check
-    info "Checking internet connectivity (multiple methods)..."
+    
+    # Internet check
+    info "Checking internet..."
     if check_internet; then
-        ok "Internet connection verified"
+        ok "Internet OK"
     else
-        warn "Standard internet check failed."
-        warn "Trying to continue anyway (some VPS block ping/curl checks)..."
-        warn "If download fails, please check your network manually."
-        # Don't exit, just warn and continue
-        sleep 2
+        warn "Internet check failed, but continuing..."
     fi
-
-    if [[ -f "${BIN_FILE}" ]]; then
-        warn "HVM Panel already installed."
-        read -rp "  Reinstall? (y/n): " reinstall
-        if [[ "$reinstall" != "y" && "$reinstall" != "Y" ]]; then
-            info "Cancelled."
-            exit 0
-        fi
-        if [[ "${HAS_SYSTEMD}" == true ]]; then
-            systemctl stop ${SERVICE_NAME} 2>/dev/null || true
-        fi
-        pkill -f hvmV8.bin 2>/dev/null || true
-    fi
-
-    ok "Pre-checks passed!"
-}
-
-# =========================================================
-# INSTALL DEPENDENCIES
-# =========================================================
-
-install_deps() {
-    step "2/8" "Installing Dependencies"
-
-    info "Installing packages (2-3 minutes)..."
-
+    
+    # Install deps
+    info "Installing dependencies..."
     if command -v apt >/dev/null 2>&1; then
         export DEBIAN_FRONTEND=noninteractive
-        apt update -y -qq >/dev/null 2>&1 || warn "apt update had issues"
-        apt install -y -qq \
-            curl wget lsof tar unzip sudo nano \
-            python3 python3-pip python3-setuptools \
-            ca-certificates htop net-tools iputils-ping \
-            dnsutils >/dev/null 2>&1 || warn "Some packages may have failed"
-
+        apt update -y -qq >/dev/null 2>&1 || true
+        apt install -y -qq curl wget lsof tar unzip sudo nano python3 python3-pip ca-certificates net-tools >/dev/null 2>&1 || true
     elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y -q \
-            curl wget lsof tar unzip sudo nano \
-            python3 python3-pip python3-setuptools \
-            ca-certificates htop net-tools iputils \
-            bind-utils >/dev/null 2>&1 || warn "Some packages may have failed"
-
+        dnf install -y -q curl wget lsof tar unzip sudo nano python3 python3-pip ca-certificates net-tools >/dev/null 2>&1 || true
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y -q epel-release >/dev/null 2>&1 || true
-        yum install -y -q \
-            curl wget lsof tar unzip sudo nano \
-            python3 python3-pip python3-setuptools \
-            ca-certificates htop net-tools iputils \
-            bind-utils >/dev/null 2>&1 || warn "Some packages may have failed"
-
-    elif command -v pacman >/dev/null 2>&1; then
-        pacman -Sy --noconfirm --quiet \
-            curl wget lsof tar unzip sudo nano \
-            python python-pip python-setuptools \
-            ca-certificates iputils \
-            bind >/dev/null 2>&1 || warn "Some packages may have failed"
-
-    elif command -v apk >/dev/null 2>&1; then
-        apk update --quiet >/dev/null 2>&1 || true
-        apk add --quiet \
-            curl wget lsof tar unzip sudo nano \
-            python3 py3-pip py3-setuptools \
-            ca-certificates \
-            bind-tools >/dev/null 2>&1 || warn "Some packages may have failed"
-    else
-        warn "Unknown package manager. Assuming curl/wget already installed."
+        yum install -y -q curl wget lsof tar unzip sudo nano python3 python3-pip ca-certificates net-tools >/dev/null 2>&1 || true
     fi
-
-    # Verify essential tools are available
-    for tool in curl wget; do
-        if ! command -v $tool >/dev/null 2>&1; then
-            error "Essential tool '$tool' is not available!"
-            error "Please install manually and retry."
-            exit 1
-        fi
-    done
-
-    ok "All dependencies installed!"
-}
-
-# =========================================================
-# PORT CHECK
-# =========================================================
-
-check_port() {
-    step "3/8" "Checking Port ${PANEL_PORT}"
-
-    local port_in_use=false
+    ok "Dependencies installed"
     
-    if command -v lsof >/dev/null 2>&1; then
-        if lsof -Pi :${PANEL_PORT} -sTCP:LISTEN -t >/dev/null 2>&1; then
-            port_in_use=true
-        fi
-    elif command -v ss >/dev/null 2>&1; then
-        if ss -tulpn 2>/dev/null | grep -q ":${PANEL_PORT} "; then
-            port_in_use=true
-        fi
-    elif command -v netstat >/dev/null 2>&1; then
-        if netstat -tulpn 2>/dev/null | grep -q ":${PANEL_PORT} "; then
-            port_in_use=true
-        fi
+    # Port check
+    if is_panel_running; then
+        warn "Port ${PANEL_PORT} is in use, killing..."
+        pkill -f hvmV8.bin 2>/dev/null || true
+        sleep 2
     fi
-
-    if [[ "$port_in_use" == true ]]; then
-        warn "Port ${PANEL_PORT} is in use!"
-        read -rp "  Kill existing process? (y/n): " confirm
-        if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-            local pid=""
-            if command -v lsof >/dev/null 2>&1; then
-                pid=$(lsof -Pi :${PANEL_PORT} -sTCP:LISTEN -t 2>/dev/null)
-            fi
-            if [[ -n "$pid" ]]; then
-                kill -9 $pid 2>/dev/null || true
-                ok "Port freed"
-            else
-                pkill -f hvmV8.bin 2>/dev/null || true
-                ok "Killed hvmV8.bin processes"
-            fi
-        else
-            error "Cancelled."
-            exit 1
-        fi
-    else
-        ok "Port ${PANEL_PORT} available"
-    fi
-}
-
-# =========================================================
-# SETUP DIRECTORY
-# =========================================================
-
-setup_directory() {
-    step "4/8" "Setting Up Directory"
-
-    mkdir -p "${INSTALL_DIR}"
-    mkdir -p "${INSTALL_DIR}/backups"
-    mkdir -p "${INSTALL_DIR}/logs"
+    
+    # Create dir
+    mkdir -p "${INSTALL_DIR}/backups" "${INSTALL_DIR}/logs"
     cd "${INSTALL_DIR}"
-
-    ok "Directory: ${INSTALL_DIR}"
-}
-
-# =========================================================
-# DOWNLOAD BINARY (Multi-method)
-# =========================================================
-
-download_binary() {
-    step "5/8" "Downloading hvmV8.bin"
-
-    info "Source: ${BRAND_NAME} Cloud Servers"
-    info "File: hvmV8.bin (HVM Panel V8 Binary)"
+    ok "Directory created"
+    
+    # Download
+    info "Downloading hvmV8.bin (may take 5-10 min)..."
     echo
-
-    rm -f hvmV8.bin
-
+    
     local COOKIES_FILE="/tmp/gdrive_cookies_$$.txt"
     local PAGE_FILE="/tmp/gdrive_page_$$.html"
-
-    info "Downloading from Google Drive..."
-    echo
-
-    # Method 1: wget with confirmation
+    
     wget --quiet --save-cookies "${COOKIES_FILE}" --keep-session-cookies \
         --no-check-certificate \
         "https://docs.google.com/uc?export=download&id=${FILE_ID}" \
         -O "${PAGE_FILE}" 2>/dev/null || true
-
+    
     local CONFIRM=$(grep -oP 'confirm=[0-9A-Za-z_-]+' "${PAGE_FILE}" 2>/dev/null | head -1 | cut -d'=' -f2 || echo "")
-
+    
     if [[ -n "${CONFIRM}" ]]; then
-        wget --load-cookies "${COOKIES_FILE}" \
-            --no-check-certificate \
-            --progress=bar:force:noscroll \
+        wget --load-cookies "${COOKIES_FILE}" --no-check-certificate --progress=bar:force:noscroll \
             "https://docs.google.com/uc?export=download&confirm=${CONFIRM}&id=${FILE_ID}" \
             -O hvmV8.bin 2>&1 | tail -3 || true
     fi
-
-    # Method 2: Direct download if Method 1 failed
+    
     if [[ ! -f hvmV8.bin ]] || [[ ! -s hvmV8.bin ]] || file hvmV8.bin 2>/dev/null | grep -qi "html"; then
-        info "Trying alternate download method..."
         rm -f hvmV8.bin
-        wget --no-check-certificate \
-            --progress=bar:force:noscroll \
-            "${HVM_URL}" \
-            -O hvmV8.bin 2>&1 | tail -3 || true
+        wget --no-check-certificate --progress=bar:force:noscroll "${HVM_URL}" -O hvmV8.bin 2>&1 | tail -3 || true
     fi
-
-    # Method 3: curl fallback
-    if [[ ! -f hvmV8.bin ]] || [[ ! -s hvmV8.bin ]] || file hvmV8.bin 2>/dev/null | grep -qi "html"; then
-        info "Trying curl download..."
-        rm -f hvmV8.bin
-        curl -L --insecure --progress-bar \
-            "${HVM_URL}" \
-            -o hvmV8.bin || true
-    fi
-
+    
     rm -f "${COOKIES_FILE}" "${PAGE_FILE}"
-    echo
-
+    
     if [[ ! -f hvmV8.bin ]] || [[ ! -s hvmV8.bin ]]; then
-        error "Download failed after multiple attempts!"
-        echo -e "  ${YELLOW}💬 Discord: ${BLUE}${DISCORD_LINK}${NC}"
-        exit 1
+        error "Download failed!"
+        press_enter
+        return
     fi
-
-    FILE_SIZE_MB=$(du -m hvmV8.bin | cut -f1)
-
-    if [[ "${FILE_SIZE_MB}" -lt "${MIN_FILE_SIZE_MB}" ]]; then
-        error "File too small (${FILE_SIZE_MB}MB). Download may be corrupted."
+    
+    local size=$(du -m hvmV8.bin | cut -f1)
+    if [[ "${size}" -lt "${MIN_FILE_SIZE_MB}" ]]; then
+        error "File corrupted (${size}MB)"
         rm -f hvmV8.bin
-        exit 1
+        press_enter
+        return
     fi
-
-    if file hvmV8.bin 2>/dev/null | grep -qi "html"; then
-        error "Google Drive quota exceeded. Try after 24 hours."
-        echo -e "  ${YELLOW}💬 Discord: ${BLUE}${DISCORD_LINK}${NC}"
-        rm -f hvmV8.bin
-        exit 1
-    fi
-
+    
     chmod +x hvmV8.bin
-    ok "hvmV8.bin downloaded! (${FILE_SIZE_MB}MB)"
-}
-
-# =========================================================
-# FIREWALL
-# =========================================================
-
-configure_firewall() {
-    step "6/8" "Configuring Firewall"
-
-    local firewall_configured=false
-
-    if command -v ufw >/dev/null 2>&1; then
-        ufw allow ${PANEL_PORT}/tcp >/dev/null 2>&1 || true
-        ufw allow 22/tcp >/dev/null 2>&1 || true
-        firewall_configured=true
-        ok "UFW: Port ${PANEL_PORT} allowed"
-    fi
-
-    if command -v firewall-cmd >/dev/null 2>&1; then
-        firewall-cmd --permanent --add-port=${PANEL_PORT}/tcp >/dev/null 2>&1 || true
-        firewall-cmd --reload >/dev/null 2>&1 || true
-        firewall_configured=true
-        ok "Firewalld: Port ${PANEL_PORT} allowed"
-    fi
-
-    if command -v iptables >/dev/null 2>&1; then
-        iptables -C INPUT -p tcp --dport ${PANEL_PORT} -j ACCEPT >/dev/null 2>&1 || \
-        iptables -I INPUT -p tcp --dport ${PANEL_PORT} -j ACCEPT >/dev/null 2>&1 || true
-        firewall_configured=true
-        ok "Iptables: Port ${PANEL_PORT} allowed"
-    fi
-
-    if [[ "${firewall_configured}" == false ]]; then
-        warn "No firewall detected."
-    fi
-}
-
-# =========================================================
-# SETUP SERVICE
-# =========================================================
-
-setup_service() {
-    step "7/8" "Creating System Service"
-
+    ok "Downloaded (${size}MB)"
+    
+    # Firewall
+    info "Configuring firewall..."
+    command -v ufw >/dev/null 2>&1 && ufw allow ${PANEL_PORT}/tcp >/dev/null 2>&1 || true
+    command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --permanent --add-port=${PANEL_PORT}/tcp >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1 || true
+    command -v iptables >/dev/null 2>&1 && iptables -I INPUT -p tcp --dport ${PANEL_PORT} -j ACCEPT 2>/dev/null || true
+    ok "Firewall configured"
+    
+    # Create service or start manually
     if [[ "${HAS_SYSTEMD}" == true ]]; then
-
-        info "Systemd detected. Creating service..."
-
-cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
+        info "Creating systemd service..."
+        cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
 Description=HVM Panel V8 - Powered by ${BRAND_NAME}
-Documentation=${DISCORD_LINK}
 After=network-online.target
 Wants=network-online.target
 
@@ -548,236 +351,661 @@ StandardError=append:${LOG_FILE}
 [Install]
 WantedBy=multi-user.target
 EOF
-
         systemctl daemon-reload
         systemctl enable ${SERVICE_NAME} >/dev/null 2>&1
         systemctl restart ${SERVICE_NAME}
-
-        local wait_time=0
-        while [[ ${wait_time} -lt 15 ]]; do
-            if systemctl is-active --quiet ${SERVICE_NAME}; then
-                break
-            fi
-            sleep 1
-            wait_time=$((wait_time + 1))
-            printf "\r  ${CYAN}⏳ Waiting for service... (%ds)${NC}" ${wait_time}
-        done
-        echo
-
-        if systemctl is-active --quiet ${SERVICE_NAME}; then
-            ok "HVM service started successfully!"
-        else
-            warn "Service failed. Starting manually as fallback..."
-            start_manual
-        fi
-
+        ok "Service created and started"
     else
-        warn "Systemd not available"
-        info "Starting HVM Panel manually..."
-        start_manual
+        info "Starting manually..."
+        nohup ${BIN_FILE} >> ${LOG_FILE} 2>&1 &
+        sleep 3
+        ok "Panel started"
     fi
-}
-
-start_manual() {
-    pkill -f hvmV8.bin 2>/dev/null || true
-    sleep 2
-
-    cd "${INSTALL_DIR}"
-    nohup ${BIN_FILE} >> ${LOG_FILE} 2>&1 &
-    local pid=$!
-
+    
     sleep 5
-
-    if kill -0 $pid 2>/dev/null; then
-        ok "HVM Panel started manually (PID: $pid)"
-        echo $pid > "${INSTALL_DIR}/hvm.pid"
-    else
-        error "Failed to start HVM Panel!"
-        echo -e "  ${DIM}Check logs: ${LOG_FILE}${NC}"
-        echo -e "  ${YELLOW}💬 Discord: ${BLUE}${DISCORD_LINK}${NC}"
-    fi
-}
-
-# =========================================================
-# FINAL SETUP
-# =========================================================
-
-final_setup() {
-    step "8/8" "Finalizing Installation"
-
-    cat > "${INSTALL_DIR}/uninstall.sh" << 'UNINSTALL_EOF'
-#!/bin/bash
-echo "🗑️  Uninstalling HVM Panel..."
-systemctl stop hvm 2>/dev/null || true
-systemctl disable hvm 2>/dev/null || true
-pkill -f hvmV8.bin 2>/dev/null || true
-rm -f /etc/systemd/system/hvm.service
-systemctl daemon-reload 2>/dev/null || true
-rm -rf /opt/hvm
-rm -f /var/log/hvm.log
-echo "✅ HVM Panel uninstalled!"
-UNINSTALL_EOF
-    chmod +x "${INSTALL_DIR}/uninstall.sh"
-
-    cat > "${INSTALL_DIR}/restart.sh" << RESTART_EOF
-#!/bin/bash
-if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-    systemctl restart ${SERVICE_NAME}
-else
-    pkill -f hvmV8.bin 2>/dev/null || true
-    sleep 2
-    nohup ${BIN_FILE} >> ${LOG_FILE} 2>&1 &
-    echo \$! > ${INSTALL_DIR}/hvm.pid
-fi
-echo "✅ HVM Panel restarted!"
-RESTART_EOF
-    chmod +x "${INSTALL_DIR}/restart.sh"
-
-    cat > "${INSTALL_DIR}/update.sh" << UPDATESCRIPT
-#!/bin/bash
-echo "🔄 Updating HVM Panel V8..."
-systemctl stop ${SERVICE_NAME} 2>/dev/null || true
-pkill -f hvmV8.bin 2>/dev/null || true
-bash <(curl -fsSL ${INSTALLER_URL})
-UPDATESCRIPT
-    chmod +x "${INSTALL_DIR}/update.sh"
-
-    ok "Scripts created!"
-}
-
-# =========================================================
-# COMPLETION
-# =========================================================
-
-show_complete() {
-    local PANEL_STATUS
-    if command -v lsof >/dev/null 2>&1 && lsof -Pi :${PANEL_PORT} -sTCP:LISTEN -t >/dev/null 2>&1; then
-        PANEL_STATUS="${GREEN}● ONLINE${NC}"
-    elif command -v ss >/dev/null 2>&1 && ss -tulpn 2>/dev/null | grep -q ":${PANEL_PORT} "; then
-        PANEL_STATUS="${GREEN}● ONLINE${NC}"
-    else
-        PANEL_STATUS="${YELLOW}○ STARTING...${NC}"
-    fi
-
-    local PUBLIC_IP
-    PUBLIC_IP=$(curl -4 -s --max-time 10 ifconfig.me 2>/dev/null || true)
-    if [[ -z "${PUBLIC_IP}" ]]; then
-        PUBLIC_IP=$(curl -4 -s --max-time 10 api.ipify.org 2>/dev/null || true)
-    fi
-    if [[ -z "${PUBLIC_IP}" ]]; then
-        PUBLIC_IP=$(curl -4 -s --max-time 10 icanhazip.com 2>/dev/null || true)
-    fi
-    if [[ -z "${PUBLIC_IP}" ]]; then
-        PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "YOUR_SERVER_IP")
-    fi
-
-    clear
-
-    echo -e "${GREEN}${BOLD}"
-
-    cat << "EOF"
-
-    ╔══════════════════════════════════════════════════════╗
-    ║                                                      ║
-    ║     ✅  INSTALLATION COMPLETED SUCCESSFULLY!  ✅     ║
-    ║                                                      ║
-    ║              Powered by FakeCloud                    ║
-    ║                                                      ║
-    ╚══════════════════════════════════════════════════════╝
-
-EOF
-
-    echo -e "${NC}"
-
-    echo -e "  ${CYAN}╭──────────────── Panel Information ─────────────────╮${NC}"
-    echo -e "  ${CYAN}│${NC}"
-    echo -e "  ${CYAN}│${NC}  ${WHITE}📊 Status${NC}      : ${PANEL_STATUS}"
-    echo -e "  ${CYAN}│${NC}  ${WHITE}🌐 Panel URL${NC}   : ${CYAN}${BOLD}http://${PUBLIC_IP}:${PANEL_PORT}${NC}"
-    echo -e "  ${CYAN}│${NC}  ${WHITE}👤 Username${NC}    : ${GREEN}admin${NC}"
-    echo -e "  ${CYAN}│${NC}  ${WHITE}🔑 Password${NC}    : ${GREEN}admin${NC}"
-    echo -e "  ${CYAN}│${NC}"
-    echo -e "  ${CYAN}╰────────────────────────────────────────────────────╯${NC}"
-
-    if [[ "${IS_CLOUD_SHELL}" == true ]]; then
-        echo
-        echo -e "  ${YELLOW}╭──────────── ⚠️  Cloud Shell Notice ────────────────╮${NC}"
-        echo -e "  ${YELLOW}│${NC}  ${WHITE}To access panel:${NC}"
-        echo -e "  ${YELLOW}│${NC}  ${CYAN}Click 'Web Preview' icon → Change port to 5000${NC}"
-        echo -e "  ${YELLOW}╰────────────────────────────────────────────────────╯${NC}"
-    fi
-
-    echo
-    echo -e "  ${BLUE}╭──────────────── Service Commands ──────────────────╮${NC}"
-    if [[ "${HAS_SYSTEMD}" == true ]]; then
-        echo -e "  ${BLUE}│${NC}  ${GREEN}▶ Start${NC}    :  systemctl start ${SERVICE_NAME}"
-        echo -e "  ${BLUE}│${NC}  ${RED}■ Stop${NC}     :  systemctl stop ${SERVICE_NAME}"
-        echo -e "  ${BLUE}│${NC}  ${YELLOW}↻ Restart${NC}  :  systemctl restart ${SERVICE_NAME}"
-        echo -e "  ${BLUE}│${NC}  ${CYAN}ℹ Status${NC}   :  systemctl status ${SERVICE_NAME}"
-        echo -e "  ${BLUE}│${NC}  ${MAGENTA}📋 Logs${NC}    :  journalctl -u ${SERVICE_NAME} -f"
-    else
-        echo -e "  ${BLUE}│${NC}  ${GREEN}▶ Start${NC}    :  bash ${INSTALL_DIR}/restart.sh"
-        echo -e "  ${BLUE}│${NC}  ${RED}■ Stop${NC}     :  pkill -f hvmV8.bin"
-        echo -e "  ${BLUE}│${NC}  ${YELLOW}↻ Restart${NC}  :  bash ${INSTALL_DIR}/restart.sh"
-        echo -e "  ${BLUE}│${NC}  ${MAGENTA}📋 Logs${NC}    :  tail -f ${LOG_FILE}"
-    fi
-    echo -e "  ${BLUE}╰────────────────────────────────────────────────────╯${NC}"
-
-    echo
-    echo -e "  ${RED}╭──────────────── 🔐 LICENSE NOTICE ─────────────────╮${NC}"
-    echo -e "  ${RED}│${NC}  ${WHITE}${BOLD}⚠️  A valid license is required.${NC}"
-    echo -e "  ${RED}│${NC}"
-    echo -e "  ${RED}│${NC}  ${CYAN}Buy License: ${BLUE}${BOLD}${DISCORD_LINK}${NC}"
-    echo -e "  ${RED}│${NC}"
-    echo -e "  ${RED}│${NC}  ${YELLOW}Benefits: Full access, Updates, Support${NC}"
-    echo -e "  ${RED}╰────────────────────────────────────────────────────╯${NC}"
-
-    echo
-    echo -e "  ${MAGENTA}╭──────────────── 💬 Support ──────────────────────────╮${NC}"
-    echo -e "  ${MAGENTA}│${NC}  ${WHITE}Discord${NC}: ${BLUE}${BOLD}${DISCORD_LINK}${NC}"
-    echo -e "  ${MAGENTA}│${NC}  ${WHITE}Brand${NC}  : ${CYAN}${BRAND_NAME}${NC}"
-    echo -e "  ${MAGENTA}│${NC}  ${WHITE}Version${NC}: ${GREEN}${PANEL_VERSION}${NC}"
-    echo -e "  ${MAGENTA}╰──────────────────────────────────────────────────────╯${NC}"
-
-    echo
-    echo -e "  ${GREEN}${BOLD}Thank you for choosing HVM Panel V8!${NC}"
-    echo -e "  ${MAGENTA}Powered by ${BRAND_NAME} ☁️  | ${BLUE}${DISCORD_LINK}${NC}"
-    echo
+    
     line
     echo
+    echo -e "  ${BG_GREEN}${WHITE} ✅ INSTALLATION COMPLETE! ${NC}"
+    echo
+    echo -e "  🌐 Panel URL: ${CYAN}${BOLD}http://$(get_public_ip):${PANEL_PORT}${NC}"
+    echo -e "  👤 Username : ${GREEN}admin${NC}"
+    echo -e "  🔑 Password : ${GREEN}admin${NC}"
+    echo
+    echo -e "  💬 Discord: ${BLUE}${DISCORD_LINK}${NC}"
+    line
+    press_enter
 }
 
 # =========================================================
-# MAIN
+# OPTION 2: REINSTALL
+# =========================================================
+
+action_reinstall() {
+    show_logo
+    echo -e "  ${BG_BLUE}${WHITE} 🔄 REINSTALL PANEL ${NC}"
+    echo
+    warn "This will UNINSTALL and INSTALL fresh copy!"
+    echo
+    read -rp "  Are you sure? (y/n): " confirm
+    
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        info "Cancelled"
+        press_enter
+        return
+    fi
+    
+    info "Uninstalling..."
+    pkill -f hvmV8.bin 2>/dev/null || true
+    [[ "${HAS_SYSTEMD}" == true ]] && systemctl stop ${SERVICE_NAME} 2>/dev/null || true
+    [[ "${HAS_SYSTEMD}" == true ]] && systemctl disable ${SERVICE_NAME} 2>/dev/null || true
+    rm -f /etc/systemd/system/${SERVICE_NAME}.service
+    [[ "${HAS_SYSTEMD}" == true ]] && systemctl daemon-reload 2>/dev/null || true
+    rm -rf "${INSTALL_DIR}"
+    rm -f "${LOG_FILE}"
+    ok "Old installation removed"
+    
+    action_install
+}
+
+# =========================================================
+# OPTION 3: UNINSTALL
+# =========================================================
+
+action_uninstall() {
+    show_logo
+    echo -e "  ${BG_RED}${WHITE} 🗑️  UNINSTALL PANEL ${NC}"
+    echo
+    
+    if ! is_panel_installed; then
+        warn "Panel is not installed!"
+        press_enter
+        return
+    fi
+    
+    warn "This will PERMANENTLY DELETE:"
+    echo -e "    ${DIM}• Panel binary${NC}"
+    echo -e "    ${DIM}• Configuration files${NC}"
+    echo -e "    ${DIM}• Log files${NC}"
+    echo -e "    ${DIM}• Database (VPS/User data)${NC}"
+    echo
+    read -rp "  Type 'YES' to confirm: " confirm
+    
+    if [[ "$confirm" != "YES" ]]; then
+        info "Cancelled"
+        press_enter
+        return
+    fi
+    
+    info "Uninstalling..."
+    pkill -f hvmV8.bin 2>/dev/null || true
+    [[ "${HAS_SYSTEMD}" == true ]] && systemctl stop ${SERVICE_NAME} 2>/dev/null || true
+    [[ "${HAS_SYSTEMD}" == true ]] && systemctl disable ${SERVICE_NAME} 2>/dev/null || true
+    rm -f /etc/systemd/system/${SERVICE_NAME}.service
+    [[ "${HAS_SYSTEMD}" == true ]] && systemctl daemon-reload 2>/dev/null || true
+    rm -rf "${INSTALL_DIR}"
+    rm -f "${LOG_FILE}"
+    ok "Panel uninstalled successfully!"
+    press_enter
+}
+
+# =========================================================
+# OPTION 4: START/STOP
+# =========================================================
+
+action_toggle() {
+    show_logo
+    echo -e "  ${BG_YELLOW}${WHITE} ⚡ START / STOP PANEL ${NC}"
+    echo
+    
+    if ! is_panel_installed; then
+        error "Panel not installed!"
+        press_enter
+        return
+    fi
+    
+    if is_panel_running; then
+        info "Panel is currently RUNNING. Stopping..."
+        [[ "${HAS_SYSTEMD}" == true ]] && systemctl stop ${SERVICE_NAME} 2>/dev/null || true
+        pkill -f hvmV8.bin 2>/dev/null || true
+        sleep 2
+        ok "Panel stopped!"
+    else
+        info "Panel is currently STOPPED. Starting..."
+        if [[ "${HAS_SYSTEMD}" == true ]]; then
+            systemctl start ${SERVICE_NAME}
+        else
+            cd "${INSTALL_DIR}"
+            nohup ${BIN_FILE} >> ${LOG_FILE} 2>&1 &
+        fi
+        sleep 5
+        if is_panel_running; then
+            ok "Panel started!"
+            echo -e "  🌐 URL: ${CYAN}http://$(get_public_ip):${PANEL_PORT}${NC}"
+        else
+            error "Failed to start!"
+        fi
+    fi
+    press_enter
+}
+
+# =========================================================
+# OPTION 5: RESTART
+# =========================================================
+
+action_restart() {
+    show_logo
+    echo -e "  ${BG_YELLOW}${WHITE} 🔄 RESTART PANEL ${NC}"
+    echo
+    
+    if ! is_panel_installed; then
+        error "Panel not installed!"
+        press_enter
+        return
+    fi
+    
+    info "Restarting panel..."
+    if [[ "${HAS_SYSTEMD}" == true ]]; then
+        systemctl restart ${SERVICE_NAME}
+    else
+        pkill -f hvmV8.bin 2>/dev/null || true
+        sleep 2
+        cd "${INSTALL_DIR}"
+        nohup ${BIN_FILE} >> ${LOG_FILE} 2>&1 &
+    fi
+    sleep 5
+    
+    if is_panel_running; then
+        ok "Panel restarted successfully!"
+        echo -e "  🌐 URL: ${CYAN}http://$(get_public_ip):${PANEL_PORT}${NC}"
+    else
+        error "Restart failed!"
+    fi
+    press_enter
+}
+
+# =========================================================
+# OPTION 6: UPDATE
+# =========================================================
+
+action_update() {
+    show_logo
+    echo -e "  ${BG_BLUE}${WHITE} ⬆️  UPDATE PANEL ${NC}"
+    echo
+    
+    warn "This will download latest binary and replace current one."
+    echo -e "  ${DIM}Your data (VPS, users) will NOT be deleted.${NC}"
+    echo
+    read -rp "  Continue? (y/n): " confirm
+    
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        info "Cancelled"
+        press_enter
+        return
+    fi
+    
+    info "Stopping panel..."
+    [[ "${HAS_SYSTEMD}" == true ]] && systemctl stop ${SERVICE_NAME} 2>/dev/null || true
+    pkill -f hvmV8.bin 2>/dev/null || true
+    sleep 2
+    
+    info "Backing up old binary..."
+    [[ -f "${BIN_FILE}" ]] && cp "${BIN_FILE}" "${BIN_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
+    ok "Backup created"
+    
+    info "Downloading latest version..."
+    cd "${INSTALL_DIR}"
+    rm -f hvmV8.bin
+    
+    wget --no-check-certificate --progress=bar:force:noscroll "${HVM_URL}" -O hvmV8.bin 2>&1 | tail -3 || true
+    
+    if [[ -f hvmV8.bin ]] && [[ -s hvmV8.bin ]]; then
+        chmod +x hvmV8.bin
+        ok "Updated to latest version!"
+        
+        info "Starting panel..."
+        if [[ "${HAS_SYSTEMD}" == true ]]; then
+            systemctl start ${SERVICE_NAME}
+        else
+            nohup ${BIN_FILE} >> ${LOG_FILE} 2>&1 &
+        fi
+        sleep 5
+        ok "Panel started!"
+    else
+        error "Update failed! Restoring backup..."
+        local latest_bak=$(ls -t "${BIN_FILE}".bak.* 2>/dev/null | head -1)
+        [[ -n "$latest_bak" ]] && cp "$latest_bak" "${BIN_FILE}"
+    fi
+    press_enter
+}
+
+# =========================================================
+# OPTION 7: VIEW LOGS
+# =========================================================
+
+action_logs() {
+    show_logo
+    echo -e "  ${BG_BLUE}${WHITE} 📋 VIEW LOGS ${NC}"
+    echo
+    echo -e "  ${WHITE}[1]${NC} Last 50 lines"
+    echo -e "  ${WHITE}[2]${NC} Last 200 lines"
+    echo -e "  ${WHITE}[3]${NC} Live tail (Ctrl+C to exit)"
+    echo -e "  ${WHITE}[4]${NC} Systemd logs (journalctl)"
+    echo -e "  ${WHITE}[0]${NC} Back to menu"
+    echo
+    echo -en "  ${GREEN}Choice:${NC} "
+    read -r choice
+    
+    case $choice in
+        1) 
+            clear
+            echo -e "${CYAN}══════ Last 50 lines ══════${NC}"
+            [[ -f "${LOG_FILE}" ]] && tail -50 "${LOG_FILE}" || warn "No log file found"
+            ;;
+        2)
+            clear
+            echo -e "${CYAN}══════ Last 200 lines ══════${NC}"
+            [[ -f "${LOG_FILE}" ]] && tail -200 "${LOG_FILE}" || warn "No log file found"
+            ;;
+        3)
+            clear
+            echo -e "${CYAN}══════ Live Logs (Ctrl+C to exit) ══════${NC}"
+            [[ -f "${LOG_FILE}" ]] && tail -f "${LOG_FILE}" || warn "No log file found"
+            ;;
+        4)
+            clear
+            echo -e "${CYAN}══════ Systemd Logs ══════${NC}"
+            [[ "${HAS_SYSTEMD}" == true ]] && journalctl -u ${SERVICE_NAME} -n 100 --no-pager || warn "Systemd not available"
+            ;;
+        0) return ;;
+        *) warn "Invalid choice" ;;
+    esac
+    press_enter
+}
+
+# =========================================================
+# OPTION 8: PANEL INFO
+# =========================================================
+
+action_info() {
+    show_logo
+    echo -e "  ${BG_BLUE}${WHITE} ℹ️  PANEL INFORMATION ${NC}"
+    echo
+    
+    if ! is_panel_installed; then
+        error "Panel not installed!"
+        press_enter
+        return
+    fi
+    
+    local status_color="${RED}"
+    local status_text="OFFLINE"
+    is_panel_running && status_color="${GREEN}" && status_text="ONLINE"
+    
+    local file_size="N/A"
+    [[ -f "${BIN_FILE}" ]] && file_size=$(du -h "${BIN_FILE}" | cut -f1)
+    
+    local install_date="N/A"
+    [[ -f "${BIN_FILE}" ]] && install_date=$(stat -c %y "${BIN_FILE}" 2>/dev/null | cut -d. -f1)
+    
+    echo -e "  ${CYAN}╭─────────────── Panel Details ───────────────╮${NC}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Status${NC}       : ${status_color}${status_text}${NC}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Version${NC}      : ${GREEN}${PANEL_VERSION}${NC}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}URL${NC}          : ${CYAN}http://$(get_public_ip):${PANEL_PORT}${NC}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Username${NC}     : admin"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Password${NC}     : admin"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Install Dir${NC}  : ${INSTALL_DIR}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Binary Size${NC}  : ${file_size}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Installed${NC}    : ${install_date}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Log File${NC}     : ${LOG_FILE}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Uptime${NC}       : $(get_panel_uptime)"
+    echo -e "  ${CYAN}╰─────────────────────────────────────────────╯${NC}"
+    press_enter
+}
+
+# =========================================================
+# OPTION 9: SYSTEM INFO
+# =========================================================
+
+action_sysinfo() {
+    show_logo
+    echo -e "  ${BG_BLUE}${WHITE} 💻 SYSTEM INFORMATION ${NC}"
+    echo
+    
+    local cpu_model=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2 | xargs || echo "Unknown")
+    local cpu_cores=$(nproc 2>/dev/null || echo "?")
+    local total_ram=$(free -h | awk '/^Mem:/{print $2}')
+    local used_ram=$(free -h | awk '/^Mem:/{print $3}')
+    local free_ram=$(free -h | awk '/^Mem:/{print $7}')
+    local disk_info=$(df -h / | awk 'NR==2{print $3" / "$2" ("$5")"}')
+    local kernel=$(uname -r)
+    local uptime=$(uptime -p 2>/dev/null | sed 's/up //' || echo "N/A")
+    local pub_ip=$(get_public_ip)
+    local priv_ip=$(hostname -I | awk '{print $1}')
+    
+    echo -e "  ${CYAN}╭─────────────── System Info ───────────────╮${NC}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}OS${NC}           : ${PRETTY_NAME:-Unknown}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Kernel${NC}       : ${kernel}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Architecture${NC} : $(uname -m)"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}CPU${NC}          : ${cpu_model}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}CPU Cores${NC}    : ${cpu_cores}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}RAM Total${NC}    : ${total_ram}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}RAM Used${NC}     : ${used_ram}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}RAM Free${NC}     : ${free_ram}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Disk${NC}         : ${disk_info}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Public IP${NC}    : ${pub_ip}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Private IP${NC}   : ${priv_ip}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Uptime${NC}       : ${uptime}"
+    echo -e "  ${CYAN}│${NC}  ${WHITE}Systemd${NC}      : $([[ "${HAS_SYSTEMD}" == true ]] && echo "Available" || echo "Not Available")"
+    echo -e "  ${CYAN}╰────────────────────────────────────────────╯${NC}"
+    press_enter
+}
+
+# =========================================================
+# OPTION 10: FIREWALL
+# =========================================================
+
+action_firewall() {
+    show_logo
+    echo -e "  ${BG_BLUE}${WHITE} 🔥 FIREWALL CONFIGURATION ${NC}"
+    echo
+    info "Configuring firewall for port ${PANEL_PORT}..."
+    
+    if command -v ufw >/dev/null 2>&1; then
+        ufw allow ${PANEL_PORT}/tcp >/dev/null 2>&1 && ok "UFW: Port ${PANEL_PORT} opened"
+        ufw allow 22/tcp >/dev/null 2>&1 && ok "UFW: SSH (22) allowed"
+    fi
+    
+    if command -v firewall-cmd >/dev/null 2>&1; then
+        firewall-cmd --permanent --add-port=${PANEL_PORT}/tcp >/dev/null 2>&1 && ok "Firewalld: Port opened"
+        firewall-cmd --reload >/dev/null 2>&1
+    fi
+    
+    if command -v iptables >/dev/null 2>&1; then
+        iptables -I INPUT -p tcp --dport ${PANEL_PORT} -j ACCEPT 2>/dev/null && ok "Iptables: Port allowed"
+    fi
+    
+    press_enter
+}
+
+# =========================================================
+# OPTION 11: RESET PASSWORD
+# =========================================================
+
+action_reset_password() {
+    show_logo
+    echo -e "  ${BG_BLUE}${WHITE} 🔑 RESET ADMIN PASSWORD ${NC}"
+    echo
+    warn "Default credentials will be restored:"
+    echo -e "  ${DIM}Username: admin${NC}"
+    echo -e "  ${DIM}Password: admin${NC}"
+    echo
+    warn "Note: For advanced password reset, contact support on Discord"
+    echo -e "  ${BLUE}${DISCORD_LINK}${NC}"
+    press_enter
+}
+
+# =========================================================
+# OPTION 12: CHANGE PORT
+# =========================================================
+
+action_change_port() {
+    show_logo
+    echo -e "  ${BG_BLUE}${WHITE} 🌐 CHANGE PANEL PORT ${NC}"
+    echo
+    echo -e "  Current port: ${CYAN}${PANEL_PORT}${NC}"
+    echo
+    read -rp "  Enter new port (1024-65535): " new_port
+    
+    if [[ ! "$new_port" =~ ^[0-9]+$ ]] || [[ "$new_port" -lt 1024 ]] || [[ "$new_port" -gt 65535 ]]; then
+        error "Invalid port!"
+        press_enter
+        return
+    fi
+    
+    warn "Port change requires panel restart and config update."
+    info "Feature coming in next update. Contact Discord for help."
+    echo -e "  ${BLUE}${DISCORD_LINK}${NC}"
+    press_enter
+}
+
+# =========================================================
+# OPTION 13: BACKUP & RESTORE
+# =========================================================
+
+action_backup() {
+    show_logo
+    echo -e "  ${BG_BLUE}${WHITE} 💾 BACKUP & RESTORE ${NC}"
+    echo
+    echo -e "  ${WHITE}[1]${NC} Create Backup"
+    echo -e "  ${WHITE}[2]${NC} List Backups"
+    echo -e "  ${WHITE}[3]${NC} Restore Backup"
+    echo -e "  ${WHITE}[0]${NC} Back"
+    echo
+    echo -en "  ${GREEN}Choice:${NC} "
+    read -r choice
+    
+    case $choice in
+        1)
+            local backup_name="hvm_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
+            info "Creating backup: ${backup_name}"
+            tar -czf "/tmp/${backup_name}" -C /opt hvm 2>/dev/null && ok "Backup created: /tmp/${backup_name}"
+            ;;
+        2)
+            echo -e "  ${CYAN}Available Backups:${NC}"
+            ls -lh /tmp/hvm_backup_*.tar.gz 2>/dev/null || warn "No backups found"
+            ;;
+        3)
+            echo -e "  ${CYAN}Available Backups:${NC}"
+            ls /tmp/hvm_backup_*.tar.gz 2>/dev/null
+            echo
+            read -rp "  Enter backup filename: " backup_file
+            if [[ -f "/tmp/${backup_file}" ]]; then
+                pkill -f hvmV8.bin 2>/dev/null || true
+                rm -rf /opt/hvm
+                tar -xzf "/tmp/${backup_file}" -C /opt && ok "Restored!"
+            else
+                error "Backup not found!"
+            fi
+            ;;
+    esac
+    press_enter
+}
+
+# =========================================================
+# OPTION 14: FIX ISSUES
+# =========================================================
+
+action_fix() {
+    show_logo
+    echo -e "  ${BG_RED}${WHITE} 🔧 FIX COMMON ISSUES ${NC}"
+    echo
+    info "Running diagnostic checks..."
+    echo
+    
+    # Check 1: Binary exists
+    if [[ -f "${BIN_FILE}" ]]; then
+        ok "Binary file exists"
+    else
+        error "Binary missing! Reinstall required."
+    fi
+    
+    # Check 2: Executable
+    if [[ -x "${BIN_FILE}" ]]; then
+        ok "Binary is executable"
+    else
+        warn "Fixing permissions..."
+        chmod +x "${BIN_FILE}" 2>/dev/null && ok "Permissions fixed"
+    fi
+    
+    # Check 3: Port
+    if is_panel_running; then
+        ok "Panel running on port ${PANEL_PORT}"
+    else
+        warn "Panel not running. Trying to start..."
+        cd "${INSTALL_DIR}" 2>/dev/null && nohup ${BIN_FILE} >> ${LOG_FILE} 2>&1 &
+        sleep 3
+        is_panel_running && ok "Panel started" || error "Failed to start"
+    fi
+    
+    # Check 4: Firewall
+    action_firewall_silent
+    
+    # Check 5: Log file
+    if [[ -f "${LOG_FILE}" ]]; then
+        ok "Log file exists"
+    else
+        touch "${LOG_FILE}" && ok "Log file created"
+    fi
+    
+    ok "Diagnostic complete!"
+    press_enter
+}
+
+action_firewall_silent() {
+    command -v ufw >/dev/null 2>&1 && ufw allow ${PANEL_PORT}/tcp >/dev/null 2>&1 || true
+    command -v iptables >/dev/null 2>&1 && iptables -I INPUT -p tcp --dport ${PANEL_PORT} -j ACCEPT 2>/dev/null || true
+    ok "Firewall verified"
+}
+
+# =========================================================
+# OPTION 15: DISCORD
+# =========================================================
+
+action_discord() {
+    show_logo
+    echo -e "  ${BG_BLUE}${WHITE} 💬 JOIN DISCORD SUPPORT ${NC}"
+    echo
+    echo -e "  ${CYAN}╭──────────────────────────────────────────╮${NC}"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC}   Join our Discord community for:"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC}   ${GREEN}✅${NC} 24/7 Support"
+    echo -e "  ${CYAN}│${NC}   ${GREEN}✅${NC} Latest Updates"
+    echo -e "  ${CYAN}│${NC}   ${GREEN}✅${NC} Buy License"
+    echo -e "  ${CYAN}│${NC}   ${GREEN}✅${NC} Feature Requests"
+    echo -e "  ${CYAN}│${NC}   ${GREEN}✅${NC} Bug Reports"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC}   🔗 ${BLUE}${BOLD}${DISCORD_LINK}${NC}"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}╰──────────────────────────────────────────╯${NC}"
+    press_enter
+}
+
+# =========================================================
+# OPTION 16: ABOUT
+# =========================================================
+
+action_about() {
+    show_logo
+    echo -e "  ${BG_BLUE}${WHITE} ℹ️  ABOUT FAKECLOUD ${NC}"
+    echo
+    echo -e "  ${CYAN}╭──────────────────────────────────────────╮${NC}"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC}   ${WHITE}${BOLD}FakeCloud HVM Panel${NC}"
+    echo -e "  ${CYAN}│${NC}   Version: ${GREEN}${PANEL_VERSION}${NC}"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC}   A powerful VPS management panel"
+    echo -e "  ${CYAN}│${NC}   for creating and managing LXC"
+    echo -e "  ${CYAN}│${NC}   containers with ease."
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC}   ${YELLOW}Features:${NC}"
+    echo -e "  ${CYAN}│${NC}   • Multi-node support"
+    echo -e "  ${CYAN}│${NC}   • Web-based SSH console"
+    echo -e "  ${CYAN}│${NC}   • Real-time stats"
+    echo -e "  ${CYAN}│${NC}   • User management"
+    echo -e "  ${CYAN}│${NC}   • Backup system"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC}   💬 ${BLUE}${DISCORD_LINK}${NC}"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}╰──────────────────────────────────────────╯${NC}"
+    press_enter
+}
+
+# =========================================================
+# OPTION 17: BUY LICENSE
+# =========================================================
+
+action_buy_license() {
+    show_logo
+    echo -e "  ${BG_GREEN}${WHITE} 💰 BUY LICENSE ${NC}"
+    echo
+    echo -e "  ${CYAN}╭──────────────────────────────────────────╮${NC}"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC}   ${WHITE}${BOLD}Get Full Access!${NC}"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC}   ${GREEN}💎 What You Get:${NC}"
+    echo -e "  ${CYAN}│${NC}   • Full Panel Access"
+    echo -e "  ${CYAN}│${NC}   • Unlimited VPS Creation"
+    echo -e "  ${CYAN}│${NC}   • Free Updates for 1 Year"
+    echo -e "  ${CYAN}│${NC}   • Priority Support"
+    echo -e "  ${CYAN}│${NC}   • Multi-Node Support"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC}   ${YELLOW}🎯 How to Buy:${NC}"
+    echo -e "  ${CYAN}│${NC}   1. Join Discord"
+    echo -e "  ${CYAN}│${NC}   2. Open ticket"
+    echo -e "  ${CYAN}│${NC}   3. Complete payment"
+    echo -e "  ${CYAN}│${NC}   4. Get license key"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}│${NC}   💬 ${BLUE}${BOLD}${DISCORD_LINK}${NC}"
+    echo -e "  ${CYAN}│${NC}"
+    echo -e "  ${CYAN}╰──────────────────────────────────────────╯${NC}"
+    press_enter
+}
+
+# =========================================================
+# MAIN LOOP
 # =========================================================
 
 main() {
     detect_environment
-    show_logo
-    sleep 1
-    show_system_info
-    sleep 1
-
-    echo -e "  ${YELLOW}${BOLD}Starting installation in 3 seconds...${NC}"
-    countdown 3 "Installation"
-    line
-
-    pre_checks
-    line
-    install_deps
-    line
-    check_port
-    line
-    setup_directory
-    line
-    download_binary
-    line
-    configure_firewall
-    line
-    setup_service
-    line
-    final_setup
-    line
-    show_complete
+    
+    if [[ -f /etc/os-release ]]; then
+        source /etc/os-release
+    fi
+    
+    if [[ "$EUID" -ne 0 ]]; then
+        show_logo
+        error "Please run as root!"
+        echo -e "  Run: ${WHITE}sudo bash HvmV8.sh${NC}"
+        exit 1
+    fi
+    
+    while true; do
+        show_main_menu
+        read -r choice
+        
+        case $choice in
+            1) action_install ;;
+            2) action_reinstall ;;
+            3) action_uninstall ;;
+            4) action_toggle ;;
+            5) action_restart ;;
+            6) action_update ;;
+            7) action_logs ;;
+            8) action_info ;;
+            9) action_sysinfo ;;
+            10) action_firewall; press_enter ;;
+            11) action_reset_password ;;
+            12) action_change_port ;;
+            13) action_backup ;;
+            14) action_fix ;;
+            15) action_discord ;;
+            16) action_about ;;
+            17) action_buy_license ;;
+            0) 
+                show_logo
+                echo -e "  ${GREEN}${BOLD}Thank you for using FakeCloud Manager!${NC}"
+                echo -e "  ${BLUE}${DISCORD_LINK}${NC}"
+                echo
+                exit 0
+                ;;
+            *)
+                warn "Invalid option! Please choose 0-17"
+                sleep 2
+                ;;
+        esac
+    done
 }
 
 main "$@"
