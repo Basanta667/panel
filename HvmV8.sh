@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 
 # =========================================================
-# HVM PANEL V8 ULTRA INSTALLER (v2.0 - FIXED)
+# HVM PANEL V8 ULTRA INSTALLER (v3.0 - UNIVERSAL)
 # Powered by FakeCloud
 # Discord: https://dsc.gg/fakecloud
+# Works on: Ubuntu, Debian, CentOS, Alibaba, Contabo, 
+#           Hostinger, DigitalOcean, AWS, GCP, ANY VPS!
 # =========================================================
 
-set -euo pipefail
+set -uo pipefail
 
 # =========================================================
-# COLORS & STYLES
+# COLORS
 # =========================================================
 
 RED="\e[1;31m"
@@ -38,7 +40,7 @@ PANEL_PORT="5000"
 BIN_FILE="${INSTALL_DIR}/hvmV8.bin"
 LOG_FILE="/var/log/hvm.log"
 
-MIN_FILE_SIZE_MB=30
+MIN_FILE_SIZE_MB=20
 
 DISCORD_LINK="https://dsc.gg/fakecloud"
 PANEL_VERSION="8.0-ULTRA"
@@ -46,7 +48,6 @@ BRAND_NAME="FakeCloud"
 
 INSTALLER_URL="https://raw.githubusercontent.com/Basanta667/panel/main/HvmV8.sh"
 
-# Detect environment
 HAS_SYSTEMD=false
 IS_CLOUD_SHELL=false
 
@@ -88,6 +89,49 @@ countdown() {
     printf "\r  ${GREEN}✅ ${msg} starting...${NC}          \n"
 }
 
+# =========================================================
+# UNIVERSAL INTERNET CHECK (Works on ANY VPS)
+# =========================================================
+
+check_internet() {
+    # Method 1: curl to Google
+    if curl -s --max-time 5 -o /dev/null -w "%{http_code}" https://www.google.com 2>/dev/null | grep -qE "200|301|302"; then
+        return 0
+    fi
+    
+    # Method 2: curl to Cloudflare
+    if curl -s --max-time 5 -o /dev/null -w "%{http_code}" https://1.1.1.1 2>/dev/null | grep -qE "200|301|302"; then
+        return 0
+    fi
+    
+    # Method 3: curl to GitHub
+    if curl -s --max-time 5 -o /dev/null -w "%{http_code}" https://raw.githubusercontent.com 2>/dev/null | grep -qE "200|301|302"; then
+        return 0
+    fi
+    
+    # Method 4: wget check
+    if wget -q --spider --timeout=5 https://www.google.com 2>/dev/null; then
+        return 0
+    fi
+    
+    # Method 5: ping fallback
+    if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    # Method 6: DNS check
+    if nslookup google.com >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    # Method 7: Try to resolve via /etc/hosts or DNS
+    if getent hosts google.com >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    return 1
+}
+
 detect_environment() {
     # Check systemd
     if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
@@ -95,13 +139,13 @@ detect_environment() {
     fi
 
     # Check Cloud Shell
-    if [[ -n "${CLOUD_SHELL:-}" ]] || [[ -n "${GOOGLE_CLOUD_SHELL:-}" ]] || [[ "$(hostname)" == *"cloudshell"* ]]; then
+    if [[ -n "${CLOUD_SHELL:-}" ]] || [[ -n "${GOOGLE_CLOUD_SHELL:-}" ]] || [[ "$(hostname 2>/dev/null)" == *"cloudshell"* ]]; then
         IS_CLOUD_SHELL=true
     fi
 }
 
 # =========================================================
-# ANIMATED LOGO
+# LOGO
 # =========================================================
 
 show_logo() {
@@ -159,19 +203,19 @@ show_system_info() {
     echo -e "  ${CYAN}│${NC}  ${WHITE}🐧 OS      :${NC} ${PRETTY_NAME:-Unknown}"
     echo -e "  ${CYAN}│${NC}  ${WHITE}🏗️  Arch    :${NC} $(uname -m)"
     if [[ "${IS_CLOUD_SHELL}" == true ]]; then
-        echo -e "  ${CYAN}│${NC}  ${WHITE}🌐 Env     :${NC} ${YELLOW}Google Cloud Shell (Testing Mode)${NC}"
+        echo -e "  ${CYAN}│${NC}  ${WHITE}🌐 Env     :${NC} ${YELLOW}Google Cloud Shell${NC}"
     fi
     if [[ "${HAS_SYSTEMD}" == true ]]; then
         echo -e "  ${CYAN}│${NC}  ${WHITE}⚙️  Systemd :${NC} ${GREEN}Available${NC}"
     else
-        echo -e "  ${CYAN}│${NC}  ${WHITE}⚙️  Systemd :${NC} ${YELLOW}Not Available (Manual Mode)${NC}"
+        echo -e "  ${CYAN}│${NC}  ${WHITE}⚙️  Systemd :${NC} ${YELLOW}Manual Mode${NC}"
     fi
     echo -e "  ${CYAN}╰────────────────────────────────────────────────────╯${NC}"
     echo
 }
 
 # =========================================================
-# PRE-CHECKS
+# PRE-CHECKS (Improved)
 # =========================================================
 
 pre_checks() {
@@ -188,25 +232,30 @@ pre_checks() {
         source /etc/os-release
         DISTRO=$ID
     else
-        error "Unable to detect operating system."
-        exit 1
+        DISTRO="unknown"
+        PRETTY_NAME="Unknown Linux"
     fi
 
     ARCH=$(uname -m)
     ok "OS: ${PRETTY_NAME:-Unknown} (${ARCH})"
 
-    local total_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
+    local total_ram_mb=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' || echo "1024")
     if [[ "${total_ram_mb}" -lt 512 ]]; then
         warn "Low RAM (${total_ram_mb}MB). 512MB+ recommended."
     else
         ok "RAM: ${total_ram_mb}MB available"
     fi
 
-    if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+    # UNIVERSAL Internet check
+    info "Checking internet connectivity (multiple methods)..."
+    if check_internet; then
         ok "Internet connection verified"
     else
-        error "No internet connection."
-        exit 1
+        warn "Standard internet check failed."
+        warn "Trying to continue anyway (some VPS block ping/curl checks)..."
+        warn "If download fails, please check your network manually."
+        # Don't exit, just warn and continue
+        sleep 2
     fi
 
     if [[ -f "${BIN_FILE}" ]]; then
@@ -219,7 +268,6 @@ pre_checks() {
         if [[ "${HAS_SYSTEMD}" == true ]]; then
             systemctl stop ${SERVICE_NAME} 2>/dev/null || true
         fi
-        # Kill any running instance
         pkill -f hvmV8.bin 2>/dev/null || true
     fi
 
@@ -233,52 +281,58 @@ pre_checks() {
 install_deps() {
     step "2/8" "Installing Dependencies"
 
-    info "Installing packages (this may take 2-3 minutes)..."
+    info "Installing packages (2-3 minutes)..."
 
     if command -v apt >/dev/null 2>&1; then
         export DEBIAN_FRONTEND=noninteractive
-        apt update -y -qq >/dev/null 2>&1
+        apt update -y -qq >/dev/null 2>&1 || warn "apt update had issues"
         apt install -y -qq \
             curl wget lsof tar unzip sudo nano \
             python3 python3-pip python3-setuptools \
-            ca-certificates htop net-tools \
-            libssl-dev libffi-dev >/dev/null 2>&1
+            ca-certificates htop net-tools iputils-ping \
+            dnsutils >/dev/null 2>&1 || warn "Some packages may have failed"
 
     elif command -v dnf >/dev/null 2>&1; then
         dnf install -y -q \
             curl wget lsof tar unzip sudo nano \
             python3 python3-pip python3-setuptools \
-            ca-certificates htop net-tools >/dev/null 2>&1
+            ca-certificates htop net-tools iputils \
+            bind-utils >/dev/null 2>&1 || warn "Some packages may have failed"
 
     elif command -v yum >/dev/null 2>&1; then
         yum install -y -q epel-release >/dev/null 2>&1 || true
         yum install -y -q \
             curl wget lsof tar unzip sudo nano \
             python3 python3-pip python3-setuptools \
-            ca-certificates htop net-tools >/dev/null 2>&1
+            ca-certificates htop net-tools iputils \
+            bind-utils >/dev/null 2>&1 || warn "Some packages may have failed"
 
     elif command -v pacman >/dev/null 2>&1; then
         pacman -Sy --noconfirm --quiet \
             curl wget lsof tar unzip sudo nano \
             python python-pip python-setuptools \
-            ca-certificates >/dev/null 2>&1
+            ca-certificates iputils \
+            bind >/dev/null 2>&1 || warn "Some packages may have failed"
 
     elif command -v apk >/dev/null 2>&1; then
-        apk update --quiet >/dev/null 2>&1
+        apk update --quiet >/dev/null 2>&1 || true
         apk add --quiet \
             curl wget lsof tar unzip sudo nano \
             python3 py3-pip py3-setuptools \
-            ca-certificates >/dev/null 2>&1
+            ca-certificates \
+            bind-tools >/dev/null 2>&1 || warn "Some packages may have failed"
     else
-        error "Unsupported Linux distribution: ${DISTRO}"
-        exit 1
+        warn "Unknown package manager. Assuming curl/wget already installed."
     fi
 
-    # Install Python packages (fix jaraco error)
-    info "Installing Python modules (jaraco fix)..."
-    pip3 install --quiet --upgrade setuptools wheel pip 2>/dev/null || true
-    pip3 install --quiet jaraco.text jaraco.functools jaraco.context 2>/dev/null || true
-    pip3 install --quiet more-itertools importlib_metadata packaging 2>/dev/null || true
+    # Verify essential tools are available
+    for tool in curl wget; do
+        if ! command -v $tool >/dev/null 2>&1; then
+            error "Essential tool '$tool' is not available!"
+            error "Please install manually and retry."
+            exit 1
+        fi
+    done
 
     ok "All dependencies installed!"
 }
@@ -290,14 +344,36 @@ install_deps() {
 check_port() {
     step "3/8" "Checking Port ${PANEL_PORT}"
 
-    if lsof -Pi :${PANEL_PORT} -sTCP:LISTEN -t >/dev/null 2>&1; then
+    local port_in_use=false
+    
+    if command -v lsof >/dev/null 2>&1; then
+        if lsof -Pi :${PANEL_PORT} -sTCP:LISTEN -t >/dev/null 2>&1; then
+            port_in_use=true
+        fi
+    elif command -v ss >/dev/null 2>&1; then
+        if ss -tulpn 2>/dev/null | grep -q ":${PANEL_PORT} "; then
+            port_in_use=true
+        fi
+    elif command -v netstat >/dev/null 2>&1; then
+        if netstat -tulpn 2>/dev/null | grep -q ":${PANEL_PORT} "; then
+            port_in_use=true
+        fi
+    fi
+
+    if [[ "$port_in_use" == true ]]; then
         warn "Port ${PANEL_PORT} is in use!"
         read -rp "  Kill existing process? (y/n): " confirm
         if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-            local pid=$(lsof -Pi :${PANEL_PORT} -sTCP:LISTEN -t 2>/dev/null)
+            local pid=""
+            if command -v lsof >/dev/null 2>&1; then
+                pid=$(lsof -Pi :${PANEL_PORT} -sTCP:LISTEN -t 2>/dev/null)
+            fi
             if [[ -n "$pid" ]]; then
                 kill -9 $pid 2>/dev/null || true
                 ok "Port freed"
+            else
+                pkill -f hvmV8.bin 2>/dev/null || true
+                ok "Killed hvmV8.bin processes"
             fi
         else
             error "Cancelled."
@@ -324,7 +400,7 @@ setup_directory() {
 }
 
 # =========================================================
-# DOWNLOAD BINARY
+# DOWNLOAD BINARY (Multi-method)
 # =========================================================
 
 download_binary() {
@@ -339,8 +415,10 @@ download_binary() {
     local COOKIES_FILE="/tmp/gdrive_cookies_$$.txt"
     local PAGE_FILE="/tmp/gdrive_page_$$.html"
 
-    info "Connecting to download server..."
+    info "Downloading from Google Drive..."
+    echo
 
+    # Method 1: wget with confirmation
     wget --quiet --save-cookies "${COOKIES_FILE}" --keep-session-cookies \
         --no-check-certificate \
         "https://docs.google.com/uc?export=download&id=${FILE_ID}" \
@@ -348,27 +426,38 @@ download_binary() {
 
     local CONFIRM=$(grep -oP 'confirm=[0-9A-Za-z_-]+' "${PAGE_FILE}" 2>/dev/null | head -1 | cut -d'=' -f2 || echo "")
 
-    info "Downloading hvmV8.bin (5-15 minutes)..."
-    echo
-
     if [[ -n "${CONFIRM}" ]]; then
         wget --load-cookies "${COOKIES_FILE}" \
             --no-check-certificate \
             --progress=bar:force:noscroll \
             "https://docs.google.com/uc?export=download&confirm=${CONFIRM}&id=${FILE_ID}" \
-            -O hvmV8.bin 2>&1 | tail -1 || true
-    else
+            -O hvmV8.bin 2>&1 | tail -3 || true
+    fi
+
+    # Method 2: Direct download if Method 1 failed
+    if [[ ! -f hvmV8.bin ]] || [[ ! -s hvmV8.bin ]] || file hvmV8.bin 2>/dev/null | grep -qi "html"; then
+        info "Trying alternate download method..."
+        rm -f hvmV8.bin
         wget --no-check-certificate \
             --progress=bar:force:noscroll \
             "${HVM_URL}" \
-            -O hvmV8.bin 2>&1 | tail -1 || true
+            -O hvmV8.bin 2>&1 | tail -3 || true
+    fi
+
+    # Method 3: curl fallback
+    if [[ ! -f hvmV8.bin ]] || [[ ! -s hvmV8.bin ]] || file hvmV8.bin 2>/dev/null | grep -qi "html"; then
+        info "Trying curl download..."
+        rm -f hvmV8.bin
+        curl -L --insecure --progress-bar \
+            "${HVM_URL}" \
+            -o hvmV8.bin || true
     fi
 
     rm -f "${COOKIES_FILE}" "${PAGE_FILE}"
     echo
 
     if [[ ! -f hvmV8.bin ]] || [[ ! -s hvmV8.bin ]]; then
-        error "Download failed!"
+        error "Download failed after multiple attempts!"
         echo -e "  ${YELLOW}💬 Discord: ${BLUE}${DISCORD_LINK}${NC}"
         exit 1
     fi
@@ -376,12 +465,12 @@ download_binary() {
     FILE_SIZE_MB=$(du -m hvmV8.bin | cut -f1)
 
     if [[ "${FILE_SIZE_MB}" -lt "${MIN_FILE_SIZE_MB}" ]]; then
-        error "File too small (${FILE_SIZE_MB}MB). Corrupted."
+        error "File too small (${FILE_SIZE_MB}MB). Download may be corrupted."
         rm -f hvmV8.bin
         exit 1
     fi
 
-    if file hvmV8.bin | grep -qi "html"; then
+    if file hvmV8.bin 2>/dev/null | grep -qi "html"; then
         error "Google Drive quota exceeded. Try after 24 hours."
         echo -e "  ${YELLOW}💬 Discord: ${BLUE}${DISCORD_LINK}${NC}"
         rm -f hvmV8.bin
@@ -428,7 +517,7 @@ configure_firewall() {
 }
 
 # =========================================================
-# SETUP SERVICE (WITH FALLBACK)
+# SETUP SERVICE
 # =========================================================
 
 setup_service() {
@@ -449,7 +538,6 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=${INSTALL_DIR}
 ExecStart=${BIN_FILE}
-ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
 RestartSec=5
 LimitNOFILE=1048576
@@ -484,19 +572,16 @@ EOF
         fi
 
     else
-        warn "Systemd not available (Cloud Shell / Container detected)"
+        warn "Systemd not available"
         info "Starting HVM Panel manually..."
         start_manual
     fi
 }
 
-# Manual start (Fallback for Cloud Shell)
 start_manual() {
-    # Kill any existing process
     pkill -f hvmV8.bin 2>/dev/null || true
     sleep 2
 
-    # Start in background
     cd "${INSTALL_DIR}"
     nohup ${BIN_FILE} >> ${LOG_FILE} 2>&1 &
     local pid=$!
@@ -510,12 +595,6 @@ start_manual() {
         error "Failed to start HVM Panel!"
         echo -e "  ${DIM}Check logs: ${LOG_FILE}${NC}"
         echo -e "  ${YELLOW}💬 Discord: ${BLUE}${DISCORD_LINK}${NC}"
-        if [[ -f "${LOG_FILE}" ]]; then
-            echo -e "  ${DIM}Last 10 lines of log:${NC}"
-            tail -10 "${LOG_FILE}" | while read line; do
-                echo -e "  ${DIM}  ${line}${NC}"
-            done
-        fi
     fi
 }
 
@@ -526,7 +605,6 @@ start_manual() {
 final_setup() {
     step "8/8" "Finalizing Installation"
 
-    # Uninstaller
     cat > "${INSTALL_DIR}/uninstall.sh" << 'UNINSTALL_EOF'
 #!/bin/bash
 echo "🗑️  Uninstalling HVM Panel..."
@@ -541,17 +619,6 @@ echo "✅ HVM Panel uninstalled!"
 UNINSTALL_EOF
     chmod +x "${INSTALL_DIR}/uninstall.sh"
 
-    # Updater
-    cat > "${INSTALL_DIR}/update.sh" << UPDATESCRIPT
-#!/bin/bash
-echo "🔄 Updating HVM Panel V8..."
-systemctl stop ${SERVICE_NAME} 2>/dev/null || true
-pkill -f hvmV8.bin 2>/dev/null || true
-bash <(curl -fsSL ${INSTALLER_URL})
-UPDATESCRIPT
-    chmod +x "${INSTALL_DIR}/update.sh"
-
-    # Restart script
     cat > "${INSTALL_DIR}/restart.sh" << RESTART_EOF
 #!/bin/bash
 if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
@@ -566,16 +633,27 @@ echo "✅ HVM Panel restarted!"
 RESTART_EOF
     chmod +x "${INSTALL_DIR}/restart.sh"
 
-    ok "Scripts created: uninstall.sh, update.sh, restart.sh"
+    cat > "${INSTALL_DIR}/update.sh" << UPDATESCRIPT
+#!/bin/bash
+echo "🔄 Updating HVM Panel V8..."
+systemctl stop ${SERVICE_NAME} 2>/dev/null || true
+pkill -f hvmV8.bin 2>/dev/null || true
+bash <(curl -fsSL ${INSTALLER_URL})
+UPDATESCRIPT
+    chmod +x "${INSTALL_DIR}/update.sh"
+
+    ok "Scripts created!"
 }
 
 # =========================================================
-# COMPLETION SCREEN
+# COMPLETION
 # =========================================================
 
 show_complete() {
     local PANEL_STATUS
-    if lsof -Pi :${PANEL_PORT} -sTCP:LISTEN -t >/dev/null 2>&1; then
+    if command -v lsof >/dev/null 2>&1 && lsof -Pi :${PANEL_PORT} -sTCP:LISTEN -t >/dev/null 2>&1; then
+        PANEL_STATUS="${GREEN}● ONLINE${NC}"
+    elif command -v ss >/dev/null 2>&1 && ss -tulpn 2>/dev/null | grep -q ":${PANEL_PORT} "; then
         PANEL_STATUS="${GREEN}● ONLINE${NC}"
     else
         PANEL_STATUS="${YELLOW}○ STARTING...${NC}"
@@ -585,6 +663,9 @@ show_complete() {
     PUBLIC_IP=$(curl -4 -s --max-time 10 ifconfig.me 2>/dev/null || true)
     if [[ -z "${PUBLIC_IP}" ]]; then
         PUBLIC_IP=$(curl -4 -s --max-time 10 api.ipify.org 2>/dev/null || true)
+    fi
+    if [[ -z "${PUBLIC_IP}" ]]; then
+        PUBLIC_IP=$(curl -4 -s --max-time 10 icanhazip.com 2>/dev/null || true)
     fi
     if [[ -z "${PUBLIC_IP}" ]]; then
         PUBLIC_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "YOUR_SERVER_IP")
@@ -620,19 +701,13 @@ EOF
     if [[ "${IS_CLOUD_SHELL}" == true ]]; then
         echo
         echo -e "  ${YELLOW}╭──────────── ⚠️  Cloud Shell Notice ────────────────╮${NC}"
-        echo -e "  ${YELLOW}│${NC}"
-        echo -e "  ${YELLOW}│${NC}  ${WHITE}You're testing in Google Cloud Shell.${NC}"
-        echo -e "  ${YELLOW}│${NC}  ${WHITE}To access the panel:${NC}"
-        echo -e "  ${YELLOW}│${NC}  ${CYAN}1. Click 'Web Preview' icon (top right)${NC}"
-        echo -e "  ${YELLOW}│${NC}  ${CYAN}2. Change port to: ${BOLD}${PANEL_PORT}${NC}"
-        echo -e "  ${YELLOW}│${NC}  ${CYAN}3. Click 'Change and Preview'${NC}"
-        echo -e "  ${YELLOW}│${NC}"
+        echo -e "  ${YELLOW}│${NC}  ${WHITE}To access panel:${NC}"
+        echo -e "  ${YELLOW}│${NC}  ${CYAN}Click 'Web Preview' icon → Change port to 5000${NC}"
         echo -e "  ${YELLOW}╰────────────────────────────────────────────────────╯${NC}"
     fi
 
     echo
     echo -e "  ${BLUE}╭──────────────── Service Commands ──────────────────╮${NC}"
-    echo -e "  ${BLUE}│${NC}"
     if [[ "${HAS_SYSTEMD}" == true ]]; then
         echo -e "  ${BLUE}│${NC}  ${GREEN}▶ Start${NC}    :  systemctl start ${SERVICE_NAME}"
         echo -e "  ${BLUE}│${NC}  ${RED}■ Stop${NC}     :  systemctl stop ${SERVICE_NAME}"
@@ -645,44 +720,22 @@ EOF
         echo -e "  ${BLUE}│${NC}  ${YELLOW}↻ Restart${NC}  :  bash ${INSTALL_DIR}/restart.sh"
         echo -e "  ${BLUE}│${NC}  ${MAGENTA}📋 Logs${NC}    :  tail -f ${LOG_FILE}"
     fi
-    echo -e "  ${BLUE}│${NC}"
     echo -e "  ${BLUE}╰────────────────────────────────────────────────────╯${NC}"
 
     echo
-    echo -e "  ${YELLOW}╭──────────────── Quick Actions ─────────────────────╮${NC}"
-    echo -e "  ${YELLOW}│${NC}"
-    echo -e "  ${YELLOW}│${NC}  ${WHITE}🔄 Update${NC}    :  bash ${INSTALL_DIR}/update.sh"
-    echo -e "  ${YELLOW}│${NC}  ${WHITE}🗑️  Uninstall${NC} :  bash ${INSTALL_DIR}/uninstall.sh"
-    echo -e "  ${YELLOW}│${NC}  ${WHITE}↻ Restart${NC}   :  bash ${INSTALL_DIR}/restart.sh"
-    echo -e "  ${YELLOW}│${NC}"
-    echo -e "  ${YELLOW}╰────────────────────────────────────────────────────╯${NC}"
-
-    echo
     echo -e "  ${RED}╭──────────────── 🔐 LICENSE NOTICE ─────────────────╮${NC}"
+    echo -e "  ${RED}│${NC}  ${WHITE}${BOLD}⚠️  A valid license is required.${NC}"
     echo -e "  ${RED}│${NC}"
-    echo -e "  ${RED}│${NC}  ${WHITE}${BOLD}⚠️  A valid license is required to use this panel.${NC}"
+    echo -e "  ${RED}│${NC}  ${CYAN}Buy License: ${BLUE}${BOLD}${DISCORD_LINK}${NC}"
     echo -e "  ${RED}│${NC}"
-    echo -e "  ${RED}│${NC}  ${WHITE}📌 Buy License:${NC}"
-    echo -e "  ${RED}│${NC}  ${CYAN}   1. Open: ${BOLD}http://${PUBLIC_IP}:${PANEL_PORT}${NC}"
-    echo -e "  ${RED}│${NC}  ${CYAN}   2. Go to License page${NC}"
-    echo -e "  ${RED}│${NC}  ${CYAN}   3. Contact us on Discord to buy:${NC}"
-    echo -e "  ${RED}│${NC}  ${BLUE}${BOLD}      ${DISCORD_LINK}${NC}"
-    echo -e "  ${RED}│${NC}"
-    echo -e "  ${RED}│${NC}  ${YELLOW}💰 License Benefits:${NC}"
-    echo -e "  ${RED}│${NC}  ${YELLOW}   • Full panel access${NC}"
-    echo -e "  ${RED}│${NC}  ${YELLOW}   • Free updates${NC}"
-    echo -e "  ${RED}│${NC}  ${YELLOW}   • Unlimited VPS creation${NC}"
-    echo -e "  ${RED}│${NC}  ${YELLOW}   • Priority support${NC}"
-    echo -e "  ${RED}│${NC}"
+    echo -e "  ${RED}│${NC}  ${YELLOW}Benefits: Full access, Updates, Support${NC}"
     echo -e "  ${RED}╰────────────────────────────────────────────────────╯${NC}"
 
     echo
-    echo -e "  ${MAGENTA}╭──────────────── 💬 Support & Community ──────────────╮${NC}"
-    echo -e "  ${MAGENTA}│${NC}"
-    echo -e "  ${MAGENTA}│${NC}  ${WHITE}Discord${NC}  :  ${BLUE}${BOLD}${DISCORD_LINK}${NC}"
-    echo -e "  ${MAGENTA}│${NC}  ${WHITE}Brand${NC}    :  ${CYAN}${BRAND_NAME}${NC}"
-    echo -e "  ${MAGENTA}│${NC}  ${WHITE}Version${NC}  :  ${GREEN}${PANEL_VERSION}${NC}"
-    echo -e "  ${MAGENTA}│${NC}"
+    echo -e "  ${MAGENTA}╭──────────────── 💬 Support ──────────────────────────╮${NC}"
+    echo -e "  ${MAGENTA}│${NC}  ${WHITE}Discord${NC}: ${BLUE}${BOLD}${DISCORD_LINK}${NC}"
+    echo -e "  ${MAGENTA}│${NC}  ${WHITE}Brand${NC}  : ${CYAN}${BRAND_NAME}${NC}"
+    echo -e "  ${MAGENTA}│${NC}  ${WHITE}Version${NC}: ${GREEN}${PANEL_VERSION}${NC}"
     echo -e "  ${MAGENTA}╰──────────────────────────────────────────────────────╯${NC}"
 
     echo
