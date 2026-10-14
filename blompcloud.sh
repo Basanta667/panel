@@ -1,6 +1,6 @@
 #!/bin/bash
 # =====================================================================
-#  SMART BACKUP MANAGER v15  (Pterodactyl + Blueprint + Wings + Cloudflared)
+#  SMART BACKUP MANAGER v16  (Pterodactyl + Blueprint + Wings + Cloudflared)
 # =====================================================================
 
 GREEN='\033[0;32m'
@@ -34,6 +34,98 @@ if [ "$EUID" -ne 0 ]; then
 fi
 mkdir -p "$(dirname "$LOG")" "$WORK_DIR"
 
+# ==================== NO-SYSTEMD SUPPORT ====================
+# Container / PID1!=systemd par systemctl kaam nahi karta. Aise me ye shim
+# systemctl calls ko `service` ya seedhe background process me badal deta hai.
+HAS_SYSTEMD=0
+[ -d /run/systemd/system ] && HAS_SYSTEMD=1
+
+if [ "$HAS_SYSTEMD" -eq 0 ]; then
+_cf_token() {
+    local t=""
+    [ -s /etc/cloudflared/token ] && t=$(tr -d '\r\n' < /etc/cloudflared/token)
+    if [ -z "$t" ] && [ -f /etc/systemd/system/cloudflared.service ]; then
+        t=$(grep -oE 'token [A-Za-z0-9=_.-]+' /etc/systemd/system/cloudflared.service | head -1 | awk '{print $NF}')
+    fi
+    echo "$t"
+}
+_bg() { local lg="$1"; shift; setsid nohup "$@" >>"$lg" 2>&1 < /dev/null & }
+
+_nosysd() {
+    local act="$1" u="$2" t
+    case "$u" in
+        cloudflared)
+            case "$act" in
+                start)   pgrep -f 'cloudflared.*tunnel' >/dev/null && return 0
+                         t=$(_cf_token); [ -z "$t" ] && return 1
+                         _bg /var/log/cloudflared.log cloudflared tunnel --no-autoupdate run --token "$t"; sleep 2 ;;
+                stop)    pkill -f 'cloudflared.*tunnel'; return 0 ;;
+                restart) _nosysd stop cloudflared; sleep 1; _nosysd start cloudflared ;;
+            esac ;;
+        wings)
+            case "$act" in
+                start)   [ -x /usr/local/bin/wings ] || return 1
+                         pgrep -x wings >/dev/null && return 0
+                         ( cd /etc/pterodactyl 2>/dev/null && _bg /var/log/wings.log /usr/local/bin/wings ); sleep 2 ;;
+                stop)    pkill -x wings; return 0 ;;
+                restart) _nosysd stop wings; sleep 1; _nosysd start wings ;;
+            esac ;;
+        pteroq)
+            case "$act" in
+                start)   pgrep -f 'artisan queue:work' >/dev/null && return 0
+                         _bg /var/log/pteroq.log runuser -u www-data -- php /var/www/pterodactyl/artisan queue:work --queue=high,standard,low --sleep=3 --tries=3 ;;
+                stop)    pkill -f 'artisan queue:work'; return 0 ;;
+                restart) _nosysd stop pteroq; sleep 1; _nosysd start pteroq ;;
+            esac ;;
+        tailscaled)
+            case "$act" in
+                start)   pgrep -x tailscaled >/dev/null && return 0
+                         _bg /var/log/tailscaled.log tailscaled --state=/var/lib/tailscale/tailscaled.state --tun=userspace-networking ;;
+                stop)    pkill -x tailscaled; return 0 ;;
+                restart) _nosysd stop tailscaled; sleep 1; _nosysd start tailscaled ;;
+            esac ;;
+        mysql|mariadb)
+            mkdir -p /var/run/mysqld; chown mysql:mysql /var/run/mysqld 2>/dev/null
+            service "$u" "$act" >/dev/null 2>&1 ;;
+        *)  service "$u" "$act" >/dev/null 2>&1 ;;
+    esac
+}
+
+_nosysd_active() {
+    case "$1" in
+        cloudflared) pgrep -f 'cloudflared.*tunnel' >/dev/null ;;
+        wings)       pgrep -x wings >/dev/null ;;
+        pteroq)      pgrep -f 'artisan queue:work' >/dev/null ;;
+        tailscaled)  pgrep -x tailscaled >/dev/null ;;
+        mysql|mariadb) mysqladmin ping --silent >/dev/null 2>&1 ;;
+        *)           service "$1" status >/dev/null 2>&1 ;;
+    esac
+}
+
+systemctl() {
+    local now=0 cmd="" units=() a u rc=0
+    for a in "$@"; do
+        case "$a" in
+            --now) now=1 ;;
+            -*) ;;
+            *) if [ -z "$cmd" ]; then cmd="$a"; else units+=("$a"); fi ;;
+        esac
+    done
+    case "$cmd" in
+        start|stop|restart)
+            for u in "${units[@]}"; do _nosysd "$cmd" "$u" || rc=1; done; return $rc ;;
+        enable)
+            if [ $now -eq 1 ]; then for u in "${units[@]}"; do _nosysd start "$u"; done; fi
+            return 0 ;;
+        is-active) _nosysd_active "${units[0]}"; return $? ;;
+        list-unit-files)
+            { ls /etc/systemd/system/*.service /lib/systemd/system/*.service 2>/dev/null | xargs -r -n1 basename
+              ls /etc/init.d 2>/dev/null | sed 's/$/.service/'; } | sort -u | sed 's/$/ enabled/' ;;
+        *) return 0 ;;   # daemon-reload, disable, etc.
+    esac
+}
+fi
+
 # ==================== BASIC HELPERS ====================
 say()    { echo -e "$@"; }
 logmsg() { echo "$(date '+%F %T') $*" >> "$LOG"; }
@@ -66,6 +158,7 @@ env_get() {
 }
 
 start_mysql() {
+    mkdir -p /var/run/mysqld; chown mysql:mysql /var/run/mysqld 2>/dev/null
     systemctl start mysql >/dev/null 2>&1 || systemctl start mariadb >/dev/null 2>&1
 }
 
@@ -427,6 +520,8 @@ create_auto_worker() {
         echo 'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
         declare -p GREEN CYAN RED YELLOW NC REMOTE_NAME CONFIG_FILE NAME_FILE BACKUP_FOLDER \
                    KEEP_COUNT STOP_WINGS STAGING WORK_DIR LOG RCLONE_CONFIG RCLONE_FLAGS
+        declare -p HAS_SYSTEMD
+        declare -f systemctl _nosysd _nosysd_active _bg _cf_token 2>/dev/null
         declare -f say logmsg load_blomp_config load_backup_name env_get start_mysql \
                    _try_dump create_database_dump cleanup_old_backups backup_inner run_backup
         echo 'export RCLONE_CONFIG'
@@ -673,7 +768,12 @@ EOF
     systemctl daemon-reload
     if systemctl list-unit-files 2>/dev/null | grep -q '^pteroq'; then
         systemctl enable --now pteroq >/dev/null 2>&1
-        say "${GREEN}   ✓ pteroq (queue worker) chalu${NC}"
+        sleep 1
+        if systemctl is-active --quiet pteroq; then
+            say "${GREEN}   ✓ pteroq (queue worker) chalu${NC}"
+        else
+            say "${YELLOW}   ! pteroq start nahi hua${NC}"
+        fi
     elif [ ! -f /etc/supervisor/conf.d/pterodactyl-worker.conf ]; then
         cat > /etc/supervisor/conf.d/pterodactyl-worker.conf << 'EOF'
 [program:pterodactyl-worker]
@@ -806,6 +906,36 @@ auto_setup_tailscale() {
     fi
 }
 
+
+# ==================== START-ALL (no-systemd containers ke liye) ====================
+write_start_script() {
+    cat > /root/start_all.sh <<'EOF'
+#!/bin/bash
+# Container restart ke baad chalayein:  bash /root/start_all.sh
+PHP_VER="__PHP__"
+mkdir -p /var/run/mysqld; chown mysql:mysql /var/run/mysqld 2>/dev/null
+for s in cron mysql mariadb redis-server php${PHP_VER}-fpm nginx supervisor docker; do
+    service "$s" start >/dev/null 2>&1 && echo "started: $s"
+done
+pgrep -f 'artisan queue:work' >/dev/null || { setsid nohup runuser -u www-data -- php /var/www/pterodactyl/artisan queue:work --queue=high,standard,low --sleep=3 --tries=3 >>/var/log/pteroq.log 2>&1 </dev/null & }
+T=""
+[ -s /etc/cloudflared/token ] && T=$(tr -d '\r\n' < /etc/cloudflared/token)
+if [ -z "$T" ] && [ -f /etc/systemd/system/cloudflared.service ]; then
+    T=$(grep -oE 'token [A-Za-z0-9=_.-]+' /etc/systemd/system/cloudflared.service | head -1 | awk '{print $NF}')
+fi
+if [ -n "$T" ] && ! pgrep -f 'cloudflared.*tunnel' >/dev/null; then
+    setsid nohup cloudflared tunnel --no-autoupdate run --token "$T" >>/var/log/cloudflared.log 2>&1 </dev/null &
+    echo "started: cloudflared"
+fi
+if [ -x /usr/local/bin/wings ] && ! pgrep -x wings >/dev/null && docker info >/dev/null 2>&1; then
+    ( cd /etc/pterodactyl && setsid nohup /usr/local/bin/wings >>/var/log/wings.log 2>&1 </dev/null & )
+    echo "started: wings"
+fi
+EOF
+    sed -i "s/__PHP__/${PHP_VER}/" /root/start_all.sh
+    chmod 700 /root/start_all.sh
+}
+
 # ==================== 2) RESTORE + AUTO SETUP ====================
 restore_backup() {
     clear
@@ -899,7 +1029,6 @@ restore_backup() {
     echo ""
     say "${CYAN}[2/6] Pehle software install (extract se PEHLE, taaki MySQL data na toote)...${NC}"
     [ $HAS_PANEL -eq 1 ] && { install_panel_stack || say "${YELLOW}   ! Stack install me dikkat (log: $LOG)${NC}"; }
-    [ $HAS_WINGS -eq 1 ] && install_docker
 
     systemctl stop wings pteroq nginx "php${PHP_VER}-fpm" mysql mariadb >/dev/null 2>&1 || true
 
@@ -921,8 +1050,14 @@ restore_backup() {
         chown -R mysql:mysql /var/lib/mysql 2>/dev/null
         start_mysql
         if ! wait_mysql; then
-            say "${YELLOW}   ! Raw datadir se MySQL start nahi hua (version mismatch?) — fresh init, purana data .broken me rakha.${NC}"
-            fresh_init_mysql || say "${RED}   ✗ MySQL phir bhi start nahi hua. Log: $LOG${NC}"
+            say "${YELLOW}   ! Raw datadir se MySQL start nahi hua.${NC}"
+            tail -n 8 /var/log/mysql/error.log 2>/dev/null
+            read -p "   Fresh MySQL init karein? (purana data /var/lib/mysql.broken.* me rakha jayega) [y/N]: " ans
+            if [[ "$ans" =~ ^[Yy]$ ]]; then
+                fresh_init_mysql || say "${RED}   ✗ MySQL phir bhi start nahi hua. Log: $LOG${NC}"
+            else
+                say "${YELLOW}   Skip — data /var/lib/mysql me untouched hai.${NC}"
+            fi
         else
             say "${GREEN}   ✓ Layer 2: Raw MySQL start ho gaya${NC}"
         fi
@@ -939,6 +1074,10 @@ restore_backup() {
     auto_setup_cloudflared
     auto_setup_tailscale
     rm -rf "$STAGING"      # plaintext SQL/token disk par na chhode
+    if [ "$HAS_SYSTEMD" -eq 0 ]; then
+        write_start_script
+        say "${YELLOW}ℹ systemd nahi hai (container). Restart ke baad ye chalayein: ${GREEN}bash /root/start_all.sh${NC}"
+    fi
     systemctl restart cron >/dev/null 2>&1 || true
 
     echo ""
@@ -1028,7 +1167,7 @@ while true; do
     clear
     load_backup_name
     say "${GREEN}╔════════════════════════════════════════════════╗${NC}"
-    say "${GREEN}║   SMART BACKUP MANAGER v15 (Double-DB Master)  ║${NC}"
+    say "${GREEN}║   SMART BACKUP MANAGER v16 (Double-DB Master)  ║${NC}"
     say "${GREEN}╠════════════════════════════════════════════════╣${NC}"
     if [ -n "$BACKUP_NAME" ]; then
         say "${GREEN}║${NC}  Name: ${YELLOW}${BACKUP_NAME}${NC}   Folder: ${YELLOW}${BACKUP_FOLDER}/${BACKUP_NAME}/${NC}"
