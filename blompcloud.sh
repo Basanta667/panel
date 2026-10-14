@@ -1,6 +1,6 @@
 #!/bin/bash
 # =====================================================================
-#  SMART BACKUP MANAGER v16  (Pterodactyl + Blueprint + Wings + Cloudflared)
+#  SMART BACKUP MANAGER v17  (Pterodactyl + Blueprint + Wings + Cloudflared)
 # =====================================================================
 
 GREEN='\033[0;32m'
@@ -58,7 +58,7 @@ _nosysd() {
             case "$act" in
                 start)   pgrep -f 'cloudflared.*tunnel' >/dev/null && return 0
                          t=$(_cf_token); [ -z "$t" ] && return 1
-                         _bg /var/log/cloudflared.log cloudflared tunnel --no-autoupdate run --token "$t"; sleep 2 ;;
+                         _bg /var/log/cloudflared.log env TUNNEL_TRANSPORT_PROTOCOL=http2 cloudflared tunnel --no-autoupdate run --token "$t"; sleep 2 ;;
                 stop)    pkill -f 'cloudflared.*tunnel'; return 0 ;;
                 restart) _nosysd stop cloudflared; sleep 1; _nosysd start cloudflared ;;
             esac ;;
@@ -86,6 +86,12 @@ _nosysd() {
             esac ;;
         mysql|mariadb)
             mkdir -p /var/run/mysqld; chown mysql:mysql /var/run/mysqld 2>/dev/null
+            service "$u" "$act" >/dev/null 2>&1 ;;
+        php*-fpm)
+            mkdir -p /run/php; chown www-data:www-data /run/php 2>/dev/null
+            service "$u" "$act" >/dev/null 2>&1 ;;
+        redis-server|redis)
+            mkdir -p /run/redis /var/log/redis; chown redis:redis /run/redis /var/log/redis 2>/dev/null
             service "$u" "$act" >/dev/null 2>&1 ;;
         *)  service "$u" "$act" >/dev/null 2>&1 ;;
     esac
@@ -855,46 +861,114 @@ EOF
     fi
 }
 
-# ==================== AUTO SETUP CLOUDFLARE ====================
+# ==================== CLOUDFLARE TUNNEL ====================
+install_cloudflared_bin() {
+    command -v cloudflared >/dev/null 2>&1 && return 0
+    say "${YELLOW}Cloudflared install...${NC}"
+    mkdir -p --mode=0755 /usr/share/keyrings
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-public-v2.gpg -o /usr/share/keyrings/cloudflare-public-v2.gpg >>"$LOG" 2>&1
+    echo 'deb [signed-by=/usr/share/keyrings/cloudflare-public-v2.gpg] https://pkg.cloudflare.com/cloudflared any main' > /etc/apt/sources.list.d/cloudflared.list
+    apt-get update -y >>"$LOG" 2>&1
+    apt-get install -y cloudflared >>"$LOG" 2>&1
+    command -v cloudflared >/dev/null 2>&1
+}
+
+# Sirf token ya poori "cloudflared service install eyJ..." command paste karo — token nikal leta hai
+parse_cf_token() { echo "$1" | grep -oE 'eyJ[A-Za-z0-9=_-]{20,}' | head -1; }
+
+cf_wait_connected() {
+    local i
+    for i in $(seq 1 25); do
+        if [ "$HAS_SYSTEMD" -eq 0 ]; then
+            grep -q 'Registered tunnel connection' /var/log/cloudflared.log 2>/dev/null && return 0
+        else
+            journalctl -u cloudflared -n 60 --no-pager 2>/dev/null | grep -q 'Registered tunnel connection' && return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+start_cloudflared_with_token() {
+    local t="$1"
+    install_cloudflared_bin || { say "${RED}   ✗ cloudflared install fail (log: $LOG)${NC}"; return 1; }
+    mkdir -p /etc/cloudflared
+    printf '%s' "$t" > /etc/cloudflared/token
+    chmod 600 /etc/cloudflared/token
+    say "${YELLOW}Tunnel start ho raha hai...${NC}"
+    if [ "$HAS_SYSTEMD" -eq 1 ]; then
+        cloudflared service uninstall >/dev/null 2>&1 || true
+        cloudflared service install "$t" >>"$LOG" 2>&1 || true
+        systemctl enable --now cloudflared >/dev/null 2>&1
+        systemctl restart cloudflared >/dev/null 2>&1
+    else
+        pkill -f 'cloudflared.*tunnel' 2>/dev/null; sleep 1
+        : > /var/log/cloudflared.log
+        systemctl start cloudflared
+    fi
+    if cf_wait_connected; then
+        say "${GREEN}   ✓ Cloudflared Tunnel CONNECTED!${NC}"
+        return 0
+    fi
+    say "${RED}   ✗ Tunnel connect nahi hua. Last log:${NC}"
+    if [ "$HAS_SYSTEMD" -eq 0 ]; then tail -n 8 /var/log/cloudflared.log 2>/dev/null; else journalctl -u cloudflared -n 8 --no-pager 2>/dev/null; fi
+    say "${YELLOW}   (Log me Unauthorized/invalid aaye to token purana/galat hai — naya token daalein)${NC}"
+    return 1
+}
+
+prompt_new_cf_token() {
+    local raw tok
+    say "${CYAN}Cloudflare Zero Trust → Networks → Tunnels → apna tunnel → token (eyJ... se shuru) copy karein.${NC}"
+    say "${CYAN}Sirf token ya poori 'cloudflared service install eyJ...' command — dono paste kar sakte hain.${NC}"
+    read -r -p "Naya Token (Enter = cancel): " raw
+    [ -z "$raw" ] && return 1
+    tok=$(parse_cf_token "$raw")
+    if [ -z "$tok" ]; then
+        say "${RED}   ✗ Token galat lag raha hai (eyJ... se shuru hona chahiye).${NC}"
+        return 1
+    fi
+    start_cloudflared_with_token "$tok"
+}
+
+cloudflared_menu() {
+    clear
+    say "${CYAN}======== CLOUDFLARE TUNNEL TOKEN ========${NC}"
+    if [ -s /etc/cloudflared/token ]; then
+        local cur; cur=$(tr -d '\r\n' < /etc/cloudflared/token)
+        say "Saved token: ${YELLOW}...${cur: -8}${NC}"
+    else
+        say "Saved token: ${YELLOW}koi nahi${NC}"
+    fi
+    echo ""
+    prompt_new_cf_token
+    read -p "Enter dabayein..." t
+}
+
 auto_setup_cloudflared() {
     say "${CYAN}--- CLOUDFLARE TUNNEL AUTO-SETUP ---${NC}"
-
     if [ -f "$STAGING/cloudflared_token_backup" ]; then
         mkdir -p /etc/cloudflared
         cp "$STAGING/cloudflared_token_backup" /etc/cloudflared/token
         chmod 600 /etc/cloudflared/token
     fi
-
-    if [ ! -f /etc/cloudflared/token ] && [ ! -f /etc/systemd/system/cloudflared.service ] \
-       && [ ! -d /etc/cloudflared ] && [ ! -d /root/.cloudflared ]; then
-        say "${YELLOW}   ! Cloudflared ka data/token nahi mila — skip.${NC}"
+    local tok="" a
+    [ -s /etc/cloudflared/token ] && tok=$(parse_cf_token "$(cat /etc/cloudflared/token)")
+    if [ -z "$tok" ] && [ -f /etc/systemd/system/cloudflared.service ]; then
+        tok=$(grep -oE 'eyJ[A-Za-z0-9=_-]{20,}' /etc/systemd/system/cloudflared.service | head -1)
+    fi
+    if [ -n "$tok" ]; then
+        start_cloudflared_with_token "$tok" && return 0
+    elif [ -d /etc/cloudflared ] || [ -d /root/.cloudflared ] || [ -f /etc/systemd/system/cloudflared.service ]; then
+        say "${YELLOW}   ! Cloudflared ka token backup me nahi mila.${NC}"
+    else
+        say "${YELLOW}   ! Cloudflared data nahi mila — skip (baad me menu 8 se token daal sakte hain).${NC}"
         return 0
     fi
-
-    if ! command -v cloudflared >/dev/null 2>&1; then
-        say "${YELLOW}Cloudflared install...${NC}"
-        mkdir -p --mode=0755 /usr/share/keyrings
-        curl -fsSL https://pkg.cloudflare.com/cloudflare-public-v2.gpg -o /usr/share/keyrings/cloudflare-public-v2.gpg >>"$LOG" 2>&1
-        echo 'deb [signed-by=/usr/share/keyrings/cloudflare-public-v2.gpg] https://pkg.cloudflare.com/cloudflared any main' > /etc/apt/sources.list.d/cloudflared.list
-        apt-get update -y >>"$LOG" 2>&1
-        apt-get install -y cloudflared >>"$LOG" 2>&1
+    if [ -t 0 ]; then
+        read -p "   Naya Cloudflare token daalna hai? [y/N]: " a
+        [[ "$a" =~ ^[Yy]$ ]] && prompt_new_cf_token
     fi
-
-    local TOKEN=""
-    [ -f /etc/cloudflared/token ] && TOKEN=$(cat /etc/cloudflared/token)
-    if [ -n "$TOKEN" ]; then
-        cloudflared service uninstall >/dev/null 2>&1 || true
-        cloudflared service install "$TOKEN" >>"$LOG" 2>&1 || true
-    fi
-    systemctl daemon-reload
-    systemctl enable --now cloudflared >/dev/null 2>&1
-    systemctl restart cloudflared >/dev/null 2>&1
-
-    if systemctl is-active --quiet cloudflared; then
-        say "${GREEN}   ✓ Cloudflared Tunnel Running!${NC}"
-    else
-        say "${YELLOW}   ! Cloudflared chalu nahi hua (journalctl -u cloudflared -n 30)${NC}"
-    fi
+    return 0
 }
 
 auto_setup_tailscale() {
@@ -913,7 +987,8 @@ write_start_script() {
 #!/bin/bash
 # Container restart ke baad chalayein:  bash /root/start_all.sh
 PHP_VER="__PHP__"
-mkdir -p /var/run/mysqld; chown mysql:mysql /var/run/mysqld 2>/dev/null
+mkdir -p /var/run/mysqld /run/php /run/redis /var/log/redis
+chown mysql:mysql /var/run/mysqld 2>/dev/null; chown www-data:www-data /run/php 2>/dev/null; chown redis:redis /run/redis /var/log/redis 2>/dev/null
 for s in cron mysql mariadb redis-server php${PHP_VER}-fpm nginx supervisor docker; do
     service "$s" start >/dev/null 2>&1 && echo "started: $s"
 done
@@ -924,7 +999,7 @@ if [ -z "$T" ] && [ -f /etc/systemd/system/cloudflared.service ]; then
     T=$(grep -oE 'token [A-Za-z0-9=_.-]+' /etc/systemd/system/cloudflared.service | head -1 | awk '{print $NF}')
 fi
 if [ -n "$T" ] && ! pgrep -f 'cloudflared.*tunnel' >/dev/null; then
-    setsid nohup cloudflared tunnel --no-autoupdate run --token "$T" >>/var/log/cloudflared.log 2>&1 </dev/null &
+    setsid nohup env TUNNEL_TRANSPORT_PROTOCOL=http2 cloudflared tunnel --no-autoupdate run --token "$T" >>/var/log/cloudflared.log 2>&1 </dev/null &
     echo "started: cloudflared"
 fi
 if [ -x /usr/local/bin/wings ] && ! pgrep -x wings >/dev/null && docker info >/dev/null 2>&1; then
@@ -1034,6 +1109,14 @@ restore_backup() {
 
     echo ""
     say "${CYAN}[3/6] Extracting Files...${NC}"
+    # FIX: backup ko purani/fresh datadir ke UPAR extract karne se redo-log files mix ho jati thi
+    # ("redo log file ... comes from other data directory"). Ab purani datadir side me rakhte hain.
+    if [ -d /var/lib/mysql ] && { [ -z "$MANIFEST" ] || echo "$MANIFEST" | grep -qx 'path=/var/lib/mysql'; }; then
+        pkill -x mysqld 2>/dev/null; pkill -x mariadbd 2>/dev/null; sleep 1
+        local mts; mts=$(date +%s)
+        mv /var/lib/mysql "/var/lib/mysql.pre_restore.${mts}"
+        say "${YELLOW}   ℹ Purani MySQL datadir → /var/lib/mysql.pre_restore.${mts} (sab theek chalne ke baad delete kar sakte hain)${NC}"
+    fi
     tar -xzf "$LOCAL" -C / 2>>"$LOG"
     local TRC=$?
     rm -f "$LOCAL"
@@ -1167,7 +1250,7 @@ while true; do
     clear
     load_backup_name
     say "${GREEN}╔════════════════════════════════════════════════╗${NC}"
-    say "${GREEN}║   SMART BACKUP MANAGER v16 (Double-DB Master)  ║${NC}"
+    say "${GREEN}║   SMART BACKUP MANAGER v17 (Double-DB Master)  ║${NC}"
     say "${GREEN}╠════════════════════════════════════════════════╣${NC}"
     if [ -n "$BACKUP_NAME" ]; then
         say "${GREEN}║${NC}  Name: ${YELLOW}${BACKUP_NAME}${NC}   Folder: ${YELLOW}${BACKUP_FOLDER}/${BACKUP_NAME}/${NC}"
@@ -1179,6 +1262,7 @@ while true; do
     say "${GREEN}║ ${YELLOW}5)${NC} Important Data, Services & Log Check"
     say "${GREEN}║ ${YELLOW}6)${NC} Auto-Backup OFF"
     say "${GREEN}║ ${YELLOW}7)${NC} Manual Full Setup (Panel/Wings Fresh)"
+    say "${GREEN}║ ${YELLOW}8)${NC} Cloudflare Token (naya daalna / change)"
     say "${GREEN}║ ${YELLOW}0)${NC} Exit"
     say "${GREEN}╚════════════════════════════════════════════════╝${NC}"
     read -p "Option: " opt
@@ -1190,6 +1274,7 @@ while true; do
         5) clear; show_important_data; read -p "Enter dabayein..." t ;;
         6) stop_auto_backup ;;
         7) manual_full_setup ;;
+        8) cloudflared_menu ;;
         0) exit 0 ;;
         *) sleep 1 ;;
     esac
