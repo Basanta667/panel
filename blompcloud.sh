@@ -1,6 +1,6 @@
 #!/bin/bash
 # =====================================================================
-#  SMART BACKUP MANAGER v17  (Pterodactyl + Blueprint + Wings + Cloudflared)
+#  SMART BACKUP MANAGER v18  (Pterodactyl + Blueprint + Wings + Cloudflared)
 # =====================================================================
 
 GREEN='\033[0;32m'
@@ -484,9 +484,18 @@ backup_inner() {
         return 1
     fi
 
+    if tar -tzf "$TEMP_FILE" 2>/dev/null | head -n 8 | grep -q 'pterodactyl_database_dump.sql'; then
+        say "${GREEN}   ✓ Archive test OK — SQL dump archive ke andar hai${NC}"
+    else
+        say "${YELLOW}   ⚠ Archive OK hai, par isme SQL dump NAHI hai (sirf raw MySQL files)${NC}"
+        logmsg "WARN: archive me SQL dump nahi"
+    fi
+
     HUMAN=$(du -h "$TEMP_FILE" | awk '{print $1}')
     say "${CYAN}[3/4] Backup Size: ${HUMAN}${NC}"
     say "${YELLOW}[4/4] Blomp Cloud par Upload ho raha hai...${NC}"
+    local LSZ RSZ
+    LSZ=$(stat -c%s "$TEMP_FILE")
 
     if [ -t 1 ]; then
         rclone copyto "$TEMP_FILE" "$DEST_OBJECT" "${RCLONE_FLAGS[@]}" --progress
@@ -498,6 +507,13 @@ backup_inner() {
 
     say "--------------------------------------------------------"
     if [ $UPLOAD_RC -eq 0 ]; then
+        RSZ=$(rclone lsf --format s "$DEST_DIR" --include "$FILE" "${RCLONE_FLAGS[@]}" 2>>"$LOG" | head -1)
+        if [ -n "$RSZ" ] && [ "$RSZ" != "$LSZ" ]; then
+            say "${RED}✗ Cloud par size match nahi hua (local=$LSZ cloud=$RSZ) — backup BAD maana gaya, purane delete nahi honge.${NC}"
+            logmsg "FAIL: size mismatch local=$LSZ cloud=$RSZ"
+            return 1
+        fi
+        say "${GREEN}✓ Cloud size verified (${LSZ} bytes)${NC}"
         say "${GREEN}✓ BACKUP SUCCESSFUL & UPLOADED!${NC}"
         logmsg "SUCCESS $FILE ($HUMAN)"
         cleanup_old_backups "$DEST_DIR" "$FILE"
@@ -1011,6 +1027,106 @@ EOF
     chmod 700 /root/start_all.sh
 }
 
+
+# Restore ke baad check: backup me jo paths the, wo disk par aaye ya nahi
+verify_restored_paths() {
+    local m="$1" line p ok=0 miss=0
+    [ -z "$m" ] && { say "${YELLOW}   ℹ Manifest nahi (purana backup) — path check skip${NC}"; return 0; }
+    while read -r line; do
+        p="${line#path=}"
+        [ "$p" = "$line" ] && continue
+        if [ -e "$p" ]; then ok=$((ok+1)); else say "${RED}   ✗ MISSING: $p${NC}"; miss=$((miss+1)); fi
+    done <<< "$m"
+    if [ $miss -eq 0 ]; then
+        say "${GREEN}   ✓ Verify: sab ${ok} paths sahi copy ho gaye${NC}"
+    else
+        say "${YELLOW}   ⚠ ${ok} paths OK, ${miss} missing${NC}"
+    fi
+}
+
+# Cloud se backup chunne ka common helper -> PICK_FOLDER / PICK_FILE
+pick_backup() {
+    local folders=() inner=() i choice fchoice
+    PICK_FOLDER=""; PICK_FILE=""
+    mapfile -t folders < <(rclone lsf "${REMOTE_NAME}:${BLOMP_USER}/${BACKUP_FOLDER}/" --dirs-only "${RCLONE_FLAGS[@]}" 2>/dev/null)
+    if [ ${#folders[@]} -eq 0 ]; then say "${RED}Blomp par koi backup folder nahi mila!${NC}"; return 1; fi
+    say "${GREEN}Folders:${NC}"
+    for i in "${!folders[@]}"; do say "  ${YELLOW}$((i+1)))${NC} ${folders[$i]%/}/"; done
+    read -p "Number [1-${#folders[@]}] (0=back): " choice
+    [[ "$choice" =~ ^[1-9][0-9]*$ ]] || return 1
+    [ "$choice" -le "${#folders[@]}" ] || return 1
+    PICK_FOLDER="${folders[$((choice-1))]%/}"
+    mapfile -t inner < <(rclone lsf "${REMOTE_NAME}:${BLOMP_USER}/${BACKUP_FOLDER}/${PICK_FOLDER}/" --files-only --include "*.tar.gz" "${RCLONE_FLAGS[@]}" 2>/dev/null | sort -r)
+    if [ ${#inner[@]} -eq 0 ]; then say "${RED}Is folder me koi backup nahi.${NC}"; return 1; fi
+    say "${GREEN}Backups:${NC}"
+    for i in "${!inner[@]}"; do say "  ${YELLOW}$((i+1)))${NC} ${inner[$i]}"; done
+    read -p "Number [1-${#inner[@]}] (0=back): " fchoice
+    [[ "$fchoice" =~ ^[1-9][0-9]*$ ]] || return 1
+    [ "$fchoice" -le "${#inner[@]}" ] || return 1
+    PICK_FILE="${inner[$((fchoice-1))]}"
+}
+
+# ==================== 9) BACKUP VERIFY (restore kiye bina test) ====================
+verify_backup() {
+    clear
+    if ! check_blomp_login; then sleep 2; return; fi
+    say "${CYAN}╔══════════════════════════════════════════════╗${NC}"
+    say "${CYAN}║   BACKUP VERIFY (download + test, restore nahi)║${NC}"
+    say "${CYAN}╚══════════════════════════════════════════════╝${NC}"
+    pick_backup || { sleep 1; return; }
+
+    local SRC="${REMOTE_NAME}:${BLOMP_USER}/${BACKUP_FOLDER}/${PICK_FOLDER}/${PICK_FILE}"
+    local LOCAL="${WORK_DIR}/verify_${PICK_FILE}" COMP="gzip" verdict="GOOD" m tailtxt p
+    command -v pigz >/dev/null 2>&1 && COMP="pigz"
+    mkdir -p "$WORK_DIR"
+    echo ""
+    say "${YELLOW}Downloading ${PICK_FILE}...${NC}"
+    rclone copyto "$SRC" "$LOCAL" "${RCLONE_FLAGS[@]}" --progress
+    if [ ! -s "$LOCAL" ]; then say "${RED}✗ Download fail${NC}"; read -p "Enter..." t; return; fi
+    say "Size: ${GREEN}$(du -h "$LOCAL" | awk '{print $1}')${NC}"
+    echo ""
+
+    say "${CYAN}[1/4] Archive integrity (gzip test)...${NC}"
+    if "$COMP" -t "$LOCAL" 2>/dev/null; then say "${GREEN}   ✓ OK${NC}"; else say "${RED}   ✗ CORRUPT${NC}"; verdict="BAD"; fi
+
+    say "${CYAN}[2/4] Manifest...${NC}"
+    m=$(tar -xzf "$LOCAL" -O --wildcards --occurrence=1 '*backup_staging/manifest.txt' 2>/dev/null)
+    if [ -n "$m" ]; then
+        echo "$m" | sed 's/^/     /'
+    else
+        say "${YELLOW}   ⚠ Manifest nahi (purana v14/v15 se pehle ka backup)${NC}"
+    fi
+
+    say "${CYAN}[3/4] SQL dump (Layer 1)...${NC}"
+    tailtxt=$(tar -xzf "$LOCAL" -O --wildcards --occurrence=1 '*backup_staging/pterodactyl_database_dump.sql' 2>/dev/null | tail -n 3)
+    if echo "$tailtxt" | grep -q 'Dump completed'; then
+        say "${GREEN}   ✓ SQL dump mojood aur COMPLETE${NC}"
+    else
+        say "${YELLOW}   ⚠ SQL dump nahi / adhura — restore sirf raw MySQL (Layer 2) par depend karega${NC}"
+        [ "$verdict" = "GOOD" ] && verdict="RISKY"
+    fi
+
+    say "${CYAN}[4/4] Important files...${NC}"
+    tar -tzf "$LOCAL" > "$LOCAL.list" 2>/dev/null
+    say "   Total entries: $(wc -l < "$LOCAL.list")"
+    for p in var/www/pterodactyl/.env var/www/pterodactyl var/lib/mysql etc/nginx etc/letsencrypt etc/pterodactyl/config.yml etc/cloudflared/token root; do
+        if grep -qE "^/?${p}(/|$)" "$LOCAL.list"; then
+            say "   ${GREEN}✓${NC} /$p"
+        else
+            say "   ${YELLOW}-${NC} /$p ${YELLOW}(backup me nahi)${NC}"
+        fi
+    done
+    rm -f "$LOCAL" "$LOCAL.list"
+
+    echo ""
+    case "$verdict" in
+        GOOD)  say "${GREEN}════ VERDICT: BACKUP GOOD ✓ ════${NC}" ;;
+        RISKY) say "${YELLOW}════ VERDICT: BACKUP OK par SQL dump nahi — risky ════${NC}" ;;
+        *)     say "${RED}════ VERDICT: BACKUP BAD ✗ — ise restore mat karein ════${NC}" ;;
+    esac
+    read -p "Enter dabayein..." t
+}
+
 # ==================== 2) RESTORE + AUTO SETUP ====================
 restore_backup() {
     clear
@@ -1125,6 +1241,7 @@ restore_backup() {
     else
         say "${GREEN}   ✓ Files restored${NC}"
     fi
+    verify_restored_paths "$MANIFEST"
     systemctl daemon-reload
 
     echo ""
@@ -1135,7 +1252,12 @@ restore_backup() {
         if ! wait_mysql; then
             say "${YELLOW}   ! Raw datadir se MySQL start nahi hua.${NC}"
             tail -n 8 /var/log/mysql/error.log 2>/dev/null
-            read -p "   Fresh MySQL init karein? (purana data /var/lib/mysql.broken.* me rakha jayega) [y/N]: " ans
+            if [ -s "$STAGING/pterodactyl_database_dump.sql" ]; then
+                ans="y"
+                say "${GREEN}   ℹ SQL dump mojood hai — fresh init + dump import automatic hoga.${NC}"
+            else
+                read -p "   Fresh MySQL init karein? (purana data /var/lib/mysql.broken.* me rakha jayega) [y/N]: " ans
+            fi
             if [[ "$ans" =~ ^[Yy]$ ]]; then
                 fresh_init_mysql || say "${RED}   ✗ MySQL phir bhi start nahi hua. Log: $LOG${NC}"
             else
@@ -1250,7 +1372,7 @@ while true; do
     clear
     load_backup_name
     say "${GREEN}╔════════════════════════════════════════════════╗${NC}"
-    say "${GREEN}║   SMART BACKUP MANAGER v17 (Double-DB Master)  ║${NC}"
+    say "${GREEN}║   SMART BACKUP MANAGER v18 (Double-DB Master)  ║${NC}"
     say "${GREEN}╠════════════════════════════════════════════════╣${NC}"
     if [ -n "$BACKUP_NAME" ]; then
         say "${GREEN}║${NC}  Name: ${YELLOW}${BACKUP_NAME}${NC}   Folder: ${YELLOW}${BACKUP_FOLDER}/${BACKUP_NAME}/${NC}"
@@ -1263,6 +1385,7 @@ while true; do
     say "${GREEN}║ ${YELLOW}6)${NC} Auto-Backup OFF"
     say "${GREEN}║ ${YELLOW}7)${NC} Manual Full Setup (Panel/Wings Fresh)"
     say "${GREEN}║ ${YELLOW}8)${NC} Cloudflare Token (naya daalna / change)"
+    say "${GREEN}║ ${YELLOW}9)${NC} Backup Verify (download + test, restore nahi)"
     say "${GREEN}║ ${YELLOW}0)${NC} Exit"
     say "${GREEN}╚════════════════════════════════════════════════╝${NC}"
     read -p "Option: " opt
@@ -1275,6 +1398,7 @@ while true; do
         6) stop_auto_backup ;;
         7) manual_full_setup ;;
         8) cloudflared_menu ;;
+        9) verify_backup ;;
         0) exit 0 ;;
         *) sleep 1 ;;
     esac
